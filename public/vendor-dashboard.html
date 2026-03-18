@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Vendor Dashboard</title>
+</head>
+
+<body>
+
+<h1>Milk Vendor Dashboard</h1>
+
+<h2 id="total"></h2>
+
+<table border="1">
+
+<thead>
+<tr>
+<th>Customer Phone</th>
+<th>Address</th>
+<th>Packets</th>
+</tr>
+</thead>
+
+<tbody id="orders"></tbody>
+
+</table>
+
+<script>
+
+const token = new URLSearchParams(window.location.search).get("token")
+
+fetch(`/vendor/orders?token=${token}`)
+.then(res=>res.json())
+.then(data=>{
+
+document.getElementById("total").innerText =
+"Total Packets: "+data.totalPackets
+
+const table=document.getElementById("orders")
+
+data.orders.forEach(o=>{
+
+table.innerHTML += `
+<tr>
+<td>${o.phone}</td>
+<td>${o.address}</td>
+<td>${o.quantity}</td>
+</tr>
+`
+
+})
+
+})
+
+</script>
+
+</body>
+</html>
