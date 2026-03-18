@@ -1,20 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Vendor Dashboard</title>
 
 <style>
+
 body{
   font-family: Arial;
   background:#f5f6fa;
   margin:0;
-  padding:0;
 }
 
+/* Container */
 .container{
-  width:90%;
-  margin:auto;
-  margin-top:30px;
+  padding:10px;
 }
 
 /* Header */
@@ -22,38 +22,53 @@ body{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  margin-bottom:20px;
+  flex-wrap:wrap;
 }
 
 .vendor-name{
-  font-size:24px;
+  font-size:20px;
   font-weight:bold;
-}
-
-/* Card */
-.card{
-  background:white;
-  padding:20px;
-  border-radius:10px;
-  box-shadow:0px 2px 8px rgba(0,0,0,0.1);
-  margin-bottom:20px;
 }
 
 /* Button */
 .btn{
   background:#2ecc71;
   color:white;
-  padding:10px 20px;
+  padding:10px 15px;
   border:none;
   border-radius:6px;
   cursor:pointer;
+  margin-top:5px;
 }
 
-.btn:hover{
-  background:#27ae60;
+/* Card */
+.card{
+  background:white;
+  padding:15px;
+  border-radius:10px;
+  margin-top:10px;
+  box-shadow:0px 2px 6px rgba(0,0,0,0.1);
 }
 
-/* Table */
+/* Search */
+.search-box{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.search-box input{
+  padding:10px;
+  border-radius:6px;
+  border:1px solid #ccc;
+  flex:1;
+}
+
+/* TABLE VIEW (DESKTOP) */
+.table-view{
+  display:block;
+}
+
 table{
   width:100%;
   border-collapse:collapse;
@@ -63,6 +78,7 @@ th{
   background:#2c3e50;
   color:white;
   padding:10px;
+  cursor:pointer;
 }
 
 td{
@@ -70,14 +86,46 @@ td{
   border-bottom:1px solid #ddd;
 }
 
-tr:hover{
-  background:#f1f1f1;
+/* MOBILE CARD VIEW */
+.order-card{
+  display:none;
 }
 
-/* Total */
-.total{
-  font-size:20px;
-  color:#333;
+.card-row{
+  background:white;
+  padding:12px;
+  margin-bottom:10px;
+  border-radius:8px;
+  box-shadow:0px 2px 5px rgba(0,0,0,0.1);
+}
+
+.card-row div{
+  margin:4px 0;
+}
+
+/* Pagination */
+.pagination{
+  text-align:center;
+  margin-top:10px;
+}
+
+.pagination button{
+  margin:3px;
+  padding:5px 10px;
+  cursor:pointer;
+}
+
+/* ---------- MOBILE ---------- */
+@media(max-width:768px){
+
+.table-view{
+  display:none;
+}
+
+.order-card{
+  display:block;
+}
+
 }
 
 </style>
@@ -88,31 +136,44 @@ tr:hover{
 
 <div class="container">
 
-  <!-- Header -->
-  <div class="header">
-    <div class="vendor-name" id="vendorName">Vendor Dashboard</div>
-    <button class="btn" onclick="generateOrders()">Generate Orders</button>
-  </div>
+<!-- Header -->
+<div class="header">
+  <div class="vendor-name" id="vendorName">Vendor</div>
+  <button class="btn" onclick="generateOrders()">Generate Orders</button>
+</div>
 
-  <!-- Total Card -->
-  <div class="card">
-    <div class="total" id="total">Loading...</div>
-  </div>
+<!-- Total -->
+<div class="card">
+  <h3 id="total"></h3>
+</div>
 
-  <!-- Orders Table -->
-  <div class="card">
-    <table>
-      <thead>
-        <tr>
-          <th>Customer Phone</th>
-          <th>Address</th>
-          <th>Packets</th>
-          <th>Date</th>
-        </tr>
-      </thead>
-      <tbody id="orders"></tbody>
-    </table>
-  </div>
+<!-- Search -->
+<div class="card search-box">
+  <input id="phoneSearch" placeholder="Search Phone" oninput="filterData()">
+  <input id="addressSearch" placeholder="Search Address" oninput="filterData()">
+</div>
+
+<!-- DESKTOP TABLE -->
+<div class="card table-view">
+<table>
+<thead>
+<tr>
+<th>Phone</th>
+<th>Address</th>
+<th onclick="sortTable('quantity')">Packets ⬍</th>
+<th onclick="sortTable('date')">Date ⬍</th>
+</tr>
+</thead>
+
+<tbody id="orders"></tbody>
+</table>
+</div>
+
+<!-- MOBILE CARDS -->
+<div id="mobileOrders" class="order-card"></div>
+
+<!-- Pagination -->
+<div class="pagination" id="pagination"></div>
 
 </div>
 
@@ -120,8 +181,19 @@ tr:hover{
 
 const token = new URLSearchParams(window.location.search).get("token")
 
-/* ---------------- LOAD DATA ---------------- */
+let allData=[]
+let filteredData=[]
+let currentPage=1
+const pageSize=5
 
+/* FORMAT DATE */
+function formatDate(dateStr){
+ const d=new Date(dateStr)
+ return d.toLocaleDateString("en-IN") + " " +
+ d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})
+}
+
+/* LOAD DATA */
 function loadOrders(){
 
  fetch(`/vendor/orders?token=${token}`)
@@ -134,29 +206,121 @@ function loadOrders(){
  document.getElementById("vendorName").innerText =
  "Welcome " + (data.vendorName || "Vendor")
 
- const table=document.getElementById("orders")
+ allData = data.orders.map(o=>({
+   ...o,
+   formattedDate: formatDate(o.order_date)
+ }))
 
- table.innerHTML=""
+ filteredData=[...allData]
 
- data.orders.forEach(o=>{
-
- table.innerHTML += `
- <tr>
- <td>${o.phone}</td>
- <td>${o.address || "N/A"}</td>
- <td>${o.quantity}</td>
- <td>${o.order_date}</td>
- </tr>
- `
-
- })
+ render()
 
  })
 
 }
 
-/* ---------------- GENERATE ORDERS ---------------- */
+/* RENDER */
+function render(){
+ renderTable()
+ renderMobile()
+ renderPagination()
+}
 
+/* TABLE */
+function renderTable(){
+
+ const table=document.getElementById("orders")
+ table.innerHTML=""
+
+ const start=(currentPage-1)*pageSize
+ const pageData=filteredData.slice(start,start+pageSize)
+
+ pageData.forEach(o=>{
+ table.innerHTML+=`
+ <tr>
+ <td>${o.phone}</td>
+ <td>${o.address || "N/A"}</td>
+ <td style="text-align:center">${o.quantity}</td>
+ <td style="text-align:center">${o.formattedDate}</td>
+ </tr>
+ `
+ })
+
+}
+
+/* MOBILE CARDS */
+function renderMobile(){
+
+ const container=document.getElementById("mobileOrders")
+ container.innerHTML=""
+
+ const start=(currentPage-1)*pageSize
+ const pageData=filteredData.slice(start,start+pageSize)
+
+ pageData.forEach(o=>{
+ container.innerHTML+=`
+ <div class="card-row">
+   <div><b>📞 Phone:</b> ${o.phone}</div>
+   <div><b>📍 Address:</b> ${o.address || "N/A"}</div>
+   <div><b>🥛 Packets:</b> ${o.quantity}</div>
+   <div><b>📅 Date:</b> ${o.formattedDate}</div>
+ </div>
+ `
+ })
+
+}
+
+/* FILTER */
+function filterData(){
+
+ const phone=document.getElementById("phoneSearch").value
+ const address=document.getElementById("addressSearch").value.toLowerCase()
+
+ filteredData = allData.filter(o =>
+   o.phone.includes(phone) &&
+   (o.address || "").toLowerCase().includes(address)
+ )
+
+ currentPage=1
+ render()
+
+}
+
+/* SORT */
+function sortTable(type){
+
+ if(type==="quantity"){
+   filteredData.sort((a,b)=>a.quantity-b.quantity)
+ }
+
+ if(type==="date"){
+   filteredData.sort((a,b)=>new Date(a.order_date)-new Date(b.order_date))
+ }
+
+ render()
+
+}
+
+/* PAGINATION */
+function renderPagination(){
+
+ const totalPages=Math.ceil(filteredData.length/pageSize)
+ const el=document.getElementById("pagination")
+
+ el.innerHTML=""
+
+ for(let i=1;i<=totalPages;i++){
+ el.innerHTML+=`<button onclick="goPage(${i})">${i}</button>`
+ }
+
+}
+
+function goPage(p){
+ currentPage=p
+ render()
+}
+
+/* GENERATE */
 function generateOrders(){
 
  fetch(`/vendor/generate-orders?token=${token}`,{
@@ -164,16 +328,13 @@ function generateOrders(){
  })
  .then(res=>res.json())
  .then(data=>{
-
- alert(data.message)
-
- loadOrders()
-
+  alert(data.message)
+  loadOrders()
  })
 
 }
 
-/* Initial load */
+/* INIT */
 loadOrders()
 
 </script>
