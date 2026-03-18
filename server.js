@@ -1,6 +1,7 @@
 require("dotenv").config()
-
+require("./cron/orderCron")
 const express = require("express")
+
 
 // Bots
 const handleCustomerBot = require("./bots/customerBot")
@@ -128,6 +129,7 @@ app.post("/webhook",async(req,res)=>{
  }
 
 })
+
 
 
 /* ---------------- SERVER START ---------------- */

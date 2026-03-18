@@ -10,6 +10,10 @@
 
 <h2 id="total"></h2>
 
+<button onclick="generateOrders()">Generate Orders</button>
+
+<br><br>
+
 <table border="1">
 
 <thead>
@@ -17,6 +21,7 @@
 <th>Customer Phone</th>
 <th>Address</th>
 <th>Packets</th>
+<th>Date</th>
 </tr>
 </thead>
 
@@ -28,28 +33,56 @@
 
 const token = new URLSearchParams(window.location.search).get("token")
 
-fetch(`/vendor/orders?token=${token}`)
-.then(res=>res.json())
-.then(data=>{
+function loadOrders(){
 
-document.getElementById("total").innerText =
-"Total Packets: "+data.totalPackets
+ fetch(`/vendor/orders?token=${token}`)
+ .then(res=>res.json())
+ .then(data=>{
 
-const table=document.getElementById("orders")
+ document.getElementById("total").innerText =
+ "Tomorrow Total Packets: "+data.totalPackets
 
-data.orders.forEach(o=>{
+ const table=document.getElementById("orders")
 
-table.innerHTML += `
-<tr>
-<td>${o.phone}</td>
-<td>${o.address}</td>
-<td>${o.quantity}</td>
-</tr>
-`
+ table.innerHTML=""  // clear table
 
-})
+ data.orders.forEach(o=>{
 
-})
+ table.innerHTML += `
+ <tr>
+ <td>${o.phone}</td>
+ <td>${o.address || "N/A"}</td>
+ <td>${o.quantity}</td>
+ <td>${o.order_date}</td>
+ </tr>
+ `
+
+ })
+
+ })
+
+}
+
+/* ---------------- GENERATE ORDERS ---------------- */
+
+function generateOrders(){
+
+ fetch(`/vendor/generate-orders?token=${token}`,{
+  method:"POST"
+ })
+ .then(res=>res.json())
+ .then(data=>{
+
+ alert(data.message)
+
+ loadOrders()  // reload table
+
+ })
+
+}
+
+/* Initial load */
+loadOrders()
 
 </script>
 
