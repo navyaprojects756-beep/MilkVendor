@@ -2,36 +2,125 @@
 <html>
 <head>
 <title>Vendor Dashboard</title>
+
+<style>
+body{
+  font-family: Arial;
+  background:#f5f6fa;
+  margin:0;
+  padding:0;
+}
+
+.container{
+  width:90%;
+  margin:auto;
+  margin-top:30px;
+}
+
+/* Header */
+.header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:20px;
+}
+
+.vendor-name{
+  font-size:24px;
+  font-weight:bold;
+}
+
+/* Card */
+.card{
+  background:white;
+  padding:20px;
+  border-radius:10px;
+  box-shadow:0px 2px 8px rgba(0,0,0,0.1);
+  margin-bottom:20px;
+}
+
+/* Button */
+.btn{
+  background:#2ecc71;
+  color:white;
+  padding:10px 20px;
+  border:none;
+  border-radius:6px;
+  cursor:pointer;
+}
+
+.btn:hover{
+  background:#27ae60;
+}
+
+/* Table */
+table{
+  width:100%;
+  border-collapse:collapse;
+}
+
+th{
+  background:#2c3e50;
+  color:white;
+  padding:10px;
+}
+
+td{
+  padding:10px;
+  border-bottom:1px solid #ddd;
+}
+
+tr:hover{
+  background:#f1f1f1;
+}
+
+/* Total */
+.total{
+  font-size:20px;
+  color:#333;
+}
+
+</style>
+
 </head>
 
 <body>
 
-<h1>Milk Vendor Dashboard</h1>
+<div class="container">
 
-<h2 id="total"></h2>
+  <!-- Header -->
+  <div class="header">
+    <div class="vendor-name" id="vendorName">Vendor Dashboard</div>
+    <button class="btn" onclick="generateOrders()">Generate Orders</button>
+  </div>
 
-<button onclick="generateOrders()">Generate Orders</button>
+  <!-- Total Card -->
+  <div class="card">
+    <div class="total" id="total">Loading...</div>
+  </div>
 
-<br><br>
+  <!-- Orders Table -->
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Customer Phone</th>
+          <th>Address</th>
+          <th>Packets</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody id="orders"></tbody>
+    </table>
+  </div>
 
-<table border="1">
-
-<thead>
-<tr>
-<th>Customer Phone</th>
-<th>Address</th>
-<th>Packets</th>
-<th>Date</th>
-</tr>
-</thead>
-
-<tbody id="orders"></tbody>
-
-</table>
+</div>
 
 <script>
 
 const token = new URLSearchParams(window.location.search).get("token")
+
+/* ---------------- LOAD DATA ---------------- */
 
 function loadOrders(){
 
@@ -40,11 +129,14 @@ function loadOrders(){
  .then(data=>{
 
  document.getElementById("total").innerText =
- "Tomorrow Total Packets: "+data.totalPackets
+ "Tomorrow Total Packets: " + data.totalPackets
+
+ document.getElementById("vendorName").innerText =
+ "Welcome " + (data.vendorName || "Vendor")
 
  const table=document.getElementById("orders")
 
- table.innerHTML=""  // clear table
+ table.innerHTML=""
 
  data.orders.forEach(o=>{
 
@@ -75,7 +167,7 @@ function generateOrders(){
 
  alert(data.message)
 
- loadOrders()  // reload table
+ loadOrders()
 
  })
 
