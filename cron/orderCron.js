@@ -4,7 +4,7 @@ const pool = require("../db")
 console.log("⏱ Order Cron Initialized")
 
 // Every 5 seconds
-cron.schedule("*/60 * * * * *", async () => {
+cron.schedule("*/50 * * * * *", async () => {
 
  try{
 

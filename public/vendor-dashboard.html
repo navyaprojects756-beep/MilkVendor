@@ -12,120 +12,68 @@ body{
   margin:0;
 }
 
-/* Container */
-.container{
-  padding:10px;
-}
+.container{padding:10px;}
 
-/* Header */
 .header{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  flex-wrap:wrap;
 }
 
-.vendor-name{
-  font-size:20px;
-  font-weight:bold;
-}
+.vendor-name{font-size:20px;font-weight:bold;}
 
-/* Button */
 .btn{
   background:#2ecc71;
   color:white;
-  padding:10px 15px;
+  padding:10px;
   border:none;
   border-radius:6px;
-  cursor:pointer;
-  margin-top:5px;
 }
 
-/* Card */
 .card{
   background:white;
-  padding:15px;
-  border-radius:10px;
+  padding:12px;
   margin-top:10px;
-  box-shadow:0px 2px 6px rgba(0,0,0,0.1);
+  border-radius:8px;
 }
 
-/* Search */
-.search-box{
+/* FILTERS */
+.filters{
   display:flex;
   gap:10px;
   flex-wrap:wrap;
 }
 
-.search-box input{
-  padding:10px;
-  border-radius:6px;
-  border:1px solid #ccc;
+.filters input, .filters select{
+  padding:8px;
   flex:1;
 }
 
-/* TABLE VIEW (DESKTOP) */
-.table-view{
-  display:block;
-}
+/* TABLE */
+.table-view{display:block;}
 
-table{
-  width:100%;
-  border-collapse:collapse;
-}
+table{width:100%;border-collapse:collapse;}
 
 th{
   background:#2c3e50;
   color:white;
-  padding:10px;
-  cursor:pointer;
+  padding:8px;
 }
 
-td{
-  padding:10px;
-  border-bottom:1px solid #ddd;
-}
+td{padding:8px;border-bottom:1px solid #ddd;}
 
-/* MOBILE CARD VIEW */
-.order-card{
-  display:none;
-}
+.order-card{display:none;}
 
 .card-row{
   background:white;
-  padding:12px;
-  margin-bottom:10px;
-  border-radius:8px;
-  box-shadow:0px 2px 5px rgba(0,0,0,0.1);
+  padding:10px;
+  margin-bottom:8px;
 }
 
-.card-row div{
-  margin:4px 0;
-}
-
-/* Pagination */
-.pagination{
-  text-align:center;
-  margin-top:10px;
-}
-
-.pagination button{
-  margin:3px;
-  padding:5px 10px;
-  cursor:pointer;
-}
-
-/* ---------- MOBILE ---------- */
+/* MOBILE */
 @media(max-width:768px){
-
-.table-view{
-  display:none;
-}
-
-.order-card{
-  display:block;
-}
-
+.table-view{display:none;}
+.order-card{display:block;}
 }
 
 </style>
@@ -136,44 +84,38 @@ td{
 
 <div class="container">
 
-<!-- Header -->
 <div class="header">
-  <div class="vendor-name" id="vendorName">Vendor</div>
-  <button class="btn" onclick="generateOrders()">Generate Orders</button>
+ <div class="vendor-name" id="vendorName">Vendor</div>
+ <button class="btn" onclick="generateOrders()">Generate</button>
 </div>
 
-<!-- Total -->
 <div class="card">
-  <h3 id="total"></h3>
+ <h3 id="total"></h3>
 </div>
 
-<!-- Search -->
-<div class="card search-box">
-  <input id="phoneSearch" placeholder="Search Phone" oninput="filterData()">
-  <input id="addressSearch" placeholder="Search Address" oninput="filterData()">
+<div class="card filters">
+ <input id="phoneSearch" placeholder="Phone" oninput="filterData()">
+ <input id="addressSearch" placeholder="Address" oninput="filterData()">
+ <select id="apartmentFilter" onchange="filterData()">
+  <option value="">All Apartments</option>
+ </select>
 </div>
 
-<!-- DESKTOP TABLE -->
 <div class="card table-view">
 <table>
 <thead>
 <tr>
 <th>Phone</th>
 <th>Address</th>
-<th onclick="sortTable('quantity')">Packets ⬍</th>
-<th onclick="sortTable('date')">Date ⬍</th>
+<th onclick="sortTable('quantity')">Packets</th>
+<th onclick="sortTable('date')">Date</th>
 </tr>
 </thead>
-
 <tbody id="orders"></tbody>
 </table>
 </div>
 
-<!-- MOBILE CARDS -->
 <div id="mobileOrders" class="order-card"></div>
-
-<!-- Pagination -->
-<div class="pagination" id="pagination"></div>
 
 </div>
 
@@ -183,17 +125,7 @@ const token = new URLSearchParams(window.location.search).get("token")
 
 let allData=[]
 let filteredData=[]
-let currentPage=1
-const pageSize=5
 
-/* FORMAT DATE */
-function formatDate(dateStr){
- const d=new Date(dateStr)
- return d.toLocaleDateString("en-IN") + " " +
- d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})
-}
-
-/* LOAD DATA */
 function loadOrders(){
 
  fetch(`/vendor/orders?token=${token}`)
@@ -201,140 +133,99 @@ function loadOrders(){
  .then(data=>{
 
  document.getElementById("total").innerText =
- "Tomorrow Total Packets: " + data.totalPackets
+ "Tomorrow Total: " + data.totalPackets
 
  document.getElementById("vendorName").innerText =
- "Welcome " + (data.vendorName || "Vendor")
+ "Welcome " + data.vendorName
 
- allData = data.orders.map(o=>({
-   ...o,
-   formattedDate: formatDate(o.order_date)
- }))
+ allData = data.orders
+ filteredData = [...allData]
 
- filteredData=[...allData]
-
+ loadApartmentFilter()
  render()
 
  })
 
 }
 
-/* RENDER */
-function render(){
- renderTable()
- renderMobile()
- renderPagination()
-}
+function loadApartmentFilter(){
 
-/* TABLE */
-function renderTable(){
+ const select=document.getElementById("apartmentFilter")
+ select.innerHTML='<option value="">All Apartments</option>'
 
- const table=document.getElementById("orders")
- table.innerHTML=""
+ const unique=[...new Set(allData.map(o=>o.apartment).filter(Boolean))]
 
- const start=(currentPage-1)*pageSize
- const pageData=filteredData.slice(start,start+pageSize)
-
- pageData.forEach(o=>{
- table.innerHTML+=`
- <tr>
- <td>${o.phone}</td>
- <td>${o.address || "N/A"}</td>
- <td style="text-align:center">${o.quantity}</td>
- <td style="text-align:center">${o.formattedDate}</td>
- </tr>
- `
+ unique.forEach(a=>{
+ select.innerHTML+=`<option value="${a}">${a}</option>`
  })
 
 }
 
-/* MOBILE CARDS */
-function renderMobile(){
+function render(){
 
- const container=document.getElementById("mobileOrders")
- container.innerHTML=""
+ const table=document.getElementById("orders")
+ table.innerHTML=""
 
- const start=(currentPage-1)*pageSize
- const pageData=filteredData.slice(start,start+pageSize)
+ const mobile=document.getElementById("mobileOrders")
+ mobile.innerHTML=""
 
- pageData.forEach(o=>{
- container.innerHTML+=`
+ filteredData.forEach(o=>{
+
+ table.innerHTML+=`
+ <tr>
+ <td>${o.phone}</td>
+ <td>${o.address || ""}</td>
+ <td>${o.quantity}</td>
+ <td>${new Date(o.order_date).toLocaleDateString()}</td>
+ </tr>
+ `
+
+ mobile.innerHTML+=`
  <div class="card-row">
-   <div><b>📞 Phone:</b> ${o.phone}</div>
-   <div><b>📍 Address:</b> ${o.address || "N/A"}</div>
-   <div><b>🥛 Packets:</b> ${o.quantity}</div>
-   <div><b>📅 Date:</b> ${o.formattedDate}</div>
+ <div>${o.phone}</div>
+ <div>${o.address}</div>
+ <div>${o.quantity} packets</div>
  </div>
  `
  })
 
 }
 
-/* FILTER */
 function filterData(){
 
  const phone=document.getElementById("phoneSearch").value
  const address=document.getElementById("addressSearch").value.toLowerCase()
+ const apt=document.getElementById("apartmentFilter").value
 
  filteredData = allData.filter(o =>
-   o.phone.includes(phone) &&
-   (o.address || "").toLowerCase().includes(address)
+ o.phone.includes(phone) &&
+ (o.address || "").toLowerCase().includes(address) &&
+ (!apt || o.apartment===apt)
  )
 
- currentPage=1
  render()
 
 }
 
-/* SORT */
 function sortTable(type){
 
- if(type==="quantity"){
-   filteredData.sort((a,b)=>a.quantity-b.quantity)
- }
+ if(type==="quantity")
+ filteredData.sort((a,b)=>a.quantity-b.quantity)
 
- if(type==="date"){
-   filteredData.sort((a,b)=>new Date(a.order_date)-new Date(b.order_date))
- }
+ if(type==="date")
+ filteredData.sort((a,b)=>new Date(a.order_date)-new Date(b.order_date))
 
  render()
 
 }
 
-/* PAGINATION */
-function renderPagination(){
-
- const totalPages=Math.ceil(filteredData.length/pageSize)
- const el=document.getElementById("pagination")
-
- el.innerHTML=""
-
- for(let i=1;i<=totalPages;i++){
- el.innerHTML+=`<button onclick="goPage(${i})">${i}</button>`
- }
-
-}
-
-function goPage(p){
- currentPage=p
- render()
-}
-
-/* GENERATE */
 function generateOrders(){
 
- fetch(`/vendor/generate-orders?token=${token}`,{
-  method:"POST"
- })
- .then(res=>res.json())
- .then(data=>{
-  alert(data.message)
-  loadOrders()
- })
+ fetch(`/vendor/generate-orders?token=${token}`,{method:"POST"})
+ .then(()=>loadOrders())
 
 }
 
-/* INIT */
 loadOrders()
 
 </script>

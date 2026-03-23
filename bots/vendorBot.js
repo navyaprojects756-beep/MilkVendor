@@ -30,13 +30,41 @@ async function sendText(phoneNumberId, phone, text){
  }
  catch(err){
 
-  console.log("WhatsApp Error")
+  console.log("❌ WhatsApp Error")
   console.log(err.response?.data || err.message)
 
  }
 
 }
 
+/* ---------------- GENERATE ORDERS ---------------- */
+
+async function generateOrders(vendorId){
+
+ console.log("⚙️ Generating orders for vendor:", vendorId)
+
+ /* delete existing tomorrow orders */
+ await pool.query(
+ `DELETE FROM orders
+  WHERE vendor_id=$1
+  AND order_date=CURRENT_DATE + 1`,
+ [vendorId]
+ )
+
+ /* insert new orders from subscriptions */
+ await pool.query(
+ `
+ INSERT INTO orders(customer_id,vendor_id,order_date,quantity)
+ SELECT customer_id,vendor_id,CURRENT_DATE + 1,quantity
+ FROM subscriptions
+ WHERE vendor_id=$1
+ AND status='active'
+ `,
+ [vendorId]
+ )
+
+ console.log("✅ Orders generated")
+}
 
 /* ---------------- MAIN VENDOR BOT ---------------- */
 
@@ -44,11 +72,11 @@ async function handleVendorBot(msg, phoneNumberId){
 
  const phone = msg.from
 
- console.log("📩 Vendor message from:", phone)
+ console.log("\n📩 Vendor message from:", phone)
 
  if(msg.type !== "text") return
 
- const text = msg.text.body.toLowerCase()
+ const text = msg.text.body.toLowerCase().trim()
 
  console.log("💬 Vendor text:", text)
 
@@ -68,7 +96,20 @@ async function handleVendorBot(msg, phoneNumberId){
   await sendText(
    phoneNumberId,
    phone,
-   "You are not registered as vendor. Please contact admin."
+   "❌ You are not registered as vendor.\nPlease contact admin."
+  )
+
+  return
+ }
+
+ /* ---------------- CHECK STATUS ---------------- */
+
+ if(!vendor.is_active){
+
+  await sendText(
+   phoneNumberId,
+   phone,
+   "⛔ Your account is currently inactive.\nPlease contact admin."
   )
 
   return
@@ -76,25 +117,85 @@ async function handleVendorBot(msg, phoneNumberId){
 
  console.log("✅ Vendor found:", vendor.vendor_id)
 
- /* ---------------- HANDLE COMMANDS ---------------- */
+ /* ---------------- FETCH SETTINGS ---------------- */
+
+ const settingsRes = await pool.query(
+  "SELECT * FROM vendor_settings WHERE vendor_id=$1",
+  [vendor.vendor_id]
+ )
+
+ const settings = settingsRes.rows[0] || {}
+
+ /* ---------------- COMMANDS ---------------- */
 
  if(text === "hi" || text === "menu"){
 
-  /* Generate secure token */
   const token = generateVendorToken(vendor.vendor_id)
 
-  /* Dashboard link */
   const link = `${process.env.APP_BASE_URL}/vendor-dashboard.html?token=${token}`
-
-  console.log("🔗 Dashboard link:", link)
 
   await sendText(
    phoneNumberId,
    phone,
-   `Welcome ${vendor.vendor_name || "Vendor"} 👋
+   `👋 Welcome ${vendor.vendor_name || "Vendor"}
 
-Open your dashboard:
-${link}`
+📊 Dashboard:
+${link}
+
+⚙️ Commands:
+- menu → open dashboard
+- generate → generate tomorrow orders
+- status → view settings`
+  )
+
+ }
+
+ /* ---------------- GENERATE ORDERS ---------------- */
+
+ else if(text === "generate"){
+
+  await generateOrders(vendor.vendor_id)
+
+  await sendText(
+   phoneNumberId,
+   phone,
+   "✅ Tomorrow orders generated successfully!"
+  )
+
+ }
+
+ /* ---------------- STATUS ---------------- */
+
+ else if(text === "status"){
+
+  await sendText(
+   phoneNumberId,
+   phone,
+   `📊 Vendor Status
+
+Name: ${vendor.vendor_name || "Vendor"}
+Active: ${vendor.is_active ? "Yes" : "No"}
+
+Settings:
+Apartments: ${settings.allow_apartments !== false ? "Enabled" : "Disabled"}
+Houses: ${settings.allow_houses !== false ? "Enabled" : "Disabled"}`
+  )
+
+ }
+
+ /* ---------------- HELP ---------------- */
+
+ else{
+
+  await sendText(
+   phoneNumberId,
+   phone,
+   `❓ Unknown command
+
+Try:
+menu
+generate
+status`
   )
 
  }

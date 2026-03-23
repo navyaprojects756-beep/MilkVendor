@@ -14,51 +14,66 @@ router.get("/orders", async (req,res)=>{
  const decoded = verifyVendorToken(token)
  const vendorId = decoded.vendorId
 
- const result = await pool.query(
- `
+ /* ORDERS WITH FULL ADDRESS */
+ const result = await pool.query(`
  SELECT
  c.phone,
- cv.address,
+
+ CASE 
+  WHEN cv.address_type='apartment'
+  THEN a.name || ', ' || a.address || ' - ' || b.block_name || ' - ' || cv.flat_number
+  ELSE cv.manual_address
+ END as address,
+
  o.quantity,
- o.order_date
+ o.order_date,
+ a.name as apartment
+
  FROM orders o
- JOIN customers c
- ON o.customer_id=c.customer_id
+ JOIN customers c ON o.customer_id=c.customer_id
+
  LEFT JOIN customer_vendor_profile cv
- ON cv.customer_id=c.customer_id
- AND cv.vendor_id=$1
+  ON cv.customer_id=c.customer_id AND cv.vendor_id=$1
+
+ LEFT JOIN apartments a
+  ON cv.apartment_id=a.apartment_id
+
+ LEFT JOIN apartment_blocks b
+  ON cv.block_id=b.block_id
+
  WHERE o.vendor_id=$1
  ORDER BY o.order_date DESC
- `,
- [vendorId]
- )
+ `,[vendorId])
 
- const total = await pool.query(
- `
+ /* TOTAL */
+ const total = await pool.query(`
  SELECT SUM(quantity) total_packets
  FROM orders
  WHERE vendor_id=$1
  AND order_date=CURRENT_DATE + 1
- `,
+ `,[vendorId])
+
+ /* VENDOR NAME */
+ const vendor = await pool.query(
+ "SELECT vendor_name FROM vendors WHERE vendor_id=$1",
  [vendorId]
  )
 
  res.json({
+  vendorName: vendor.rows[0]?.vendor_name || "Vendor",
   totalPackets: total.rows[0].total_packets || 0,
   orders: result.rows
  })
 
  }
  catch(err){
-
  console.log(err)
  res.status(401).send("Invalid token")
-
  }
 
 })
 
-/* ---------------- MANUAL GENERATE ORDERS ---------------- */
+/* ---------------- GENERATE ---------------- */
 
 router.post("/generate-orders", async (req,res)=>{
 
@@ -90,10 +105,8 @@ router.post("/generate-orders", async (req,res)=>{
 
  }
  catch(err){
-
  console.log(err)
  res.status(401).send("Error generating orders")
-
  }
 
 })

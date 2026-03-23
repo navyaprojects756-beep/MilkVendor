@@ -1,119 +1,112 @@
 require("dotenv").config()
 require("./cron/orderCron")
-const express = require("express")
 
+const express = require("express")
+const app = express()
 
 // Bots
 const handleCustomerBot = require("./bots/customerBot")
 const handleVendorBot = require("./bots/vendorBot")
 const vendorDashboard = require("./routes/vendorDashboard")
 
+/* ---------------- MIDDLEWARE ---------------- */
 
-const app = express()
+app.use(express.json({ limit: "10mb" }))
 app.use(express.static("public"))
 app.use("/vendor", vendorDashboard)
-app.use(express.json())
+
+/* ---------------- CONFIG ---------------- */
 
 const PORT = process.env.PORT || 3000
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN
 const MAIN_VENDOR_PHONE_ID = process.env.MAIN_VENDOR_PHONE_NUMBER_ID
 
+const processedMessages = new Set()
+
+/* ---------------- HEALTH CHECK ---------------- */
+
+app.get("/", (req,res)=>{
+ res.send("✅ Milk Bot Running")
+})
 
 /* ---------------- WEBHOOK VERIFY ---------------- */
 
 app.get("/webhook",(req,res)=>{
 
- console.log("🔵 Webhook verification request received")
+ console.log("🔵 Webhook verification request")
 
  const mode=req.query["hub.mode"]
  const token=req.query["hub.verify_token"]
  const challenge=req.query["hub.challenge"]
 
- console.log("mode:",mode)
- console.log("token:",token)
-
  if(mode==="subscribe" && token===VERIFY_TOKEN){
-
-   console.log("✅ Webhook verified successfully")
-
+   console.log("✅ Webhook verified")
    return res.status(200).send(challenge)
-
  }
 
  console.log("❌ Webhook verification failed")
-
  res.sendStatus(403)
 
 })
-
 
 /* ---------------- WEBHOOK MESSAGE HANDLER ---------------- */
 
 app.post("/webhook",async(req,res)=>{
 
- console.log("\n==============================")
- console.log("📩 Incoming WhatsApp Webhook")
- console.log("==============================")
-
- // Respond immediately to avoid WhatsApp retries
+ // Always respond immediately
  res.sendStatus(200)
 
  try{
 
- const body=req.body
+ const value=req.body?.entry?.[0]?.changes?.[0]?.value
 
- console.log("📦 Webhook payload received")
-
- // Save payload for debugging (optional)
- // require("fs").writeFileSync("webhook-log.json",JSON.stringify(body,null,2))
-
- const value=body?.entry?.[0]?.changes?.[0]?.value
-
- if(!value){
-
-   console.log("❌ No value object found in webhook")
-
+ if(!value || !value.messages){
+   console.log("❌ Invalid webhook payload")
    return
-
- }
-
- if(!value.messages){
-
-   console.log("❌ No messages found in webhook")
-
-   return
-
  }
 
  const msg=value.messages[0]
-
  const phoneNumberId=value.metadata.phone_number_id
 
- console.log("📱 phone_number_id:",phoneNumberId)
+ /* ---------------- DUPLICATE PROTECTION ---------------- */
 
- console.log("👤 message from:",msg.from)
+ if(processedMessages.has(msg.id)){
+   console.log("⚠ Duplicate message skipped:", msg.id)
+   return
+ }
 
- console.log("💬 message type:",msg.type)
+ processedMessages.add(msg.id)
+
+ /* cleanup (prevent memory leak) */
+ setTimeout(()=>processedMessages.delete(msg.id), 60000)
+
+ /* ---------------- LOGGING ---------------- */
+
+ console.log("\n==============================")
+ console.log("📩 Incoming Message")
+ console.log("From:", msg.from)
+ console.log("Type:", msg.type)
+ console.log("Phone ID:", phoneNumberId)
 
  if(msg.type==="text"){
-   console.log("📝 text message:",msg.text.body)
+   console.log("Text:", msg.text.body)
  }
 
  if(msg.type==="interactive"){
-   console.log("📋 interactive reply:",msg.interactive?.list_reply?.id)
+   console.log("Interactive:", msg.interactive?.list_reply?.id)
  }
 
- /* ---------------- ROUTE BOT ---------------- */
+ /* ---------------- ROUTING ---------------- */
 
  if(phoneNumberId===MAIN_VENDOR_PHONE_ID){
 
-   console.log("➡ Routing to VENDOR BOT")
+   console.log("➡ Vendor Bot")
 
    await handleVendorBot(msg,phoneNumberId)
 
  }else{
 
-   console.log("➡ Routing to CUSTOMER BOT")
+   console.log("➡ Customer Bot")
 
    await handleCustomerBot(msg,phoneNumberId)
 
@@ -122,22 +115,28 @@ app.post("/webhook",async(req,res)=>{
  }
  catch(err){
 
- console.log("🔥 Webhook processing error")
-
- console.log(err)
+ console.log("🔥 Webhook error:", err.message)
 
  }
 
 })
 
+/* ---------------- GLOBAL ERROR HANDLER ---------------- */
 
+process.on("unhandledRejection",(err)=>{
+ console.log("❌ Unhandled Promise:", err)
+})
+
+process.on("uncaughtException",(err)=>{
+ console.log("❌ Uncaught Exception:", err)
+})
 
 /* ---------------- SERVER START ---------------- */
 
 app.listen(PORT,()=>{
 
  console.log("================================")
- console.log("🚀 Milk WhatsApp Bot Server Running")
+ console.log("🚀 Milk WhatsApp Bot Running")
  console.log("Port:",PORT)
  console.log("Vendor Phone ID:",MAIN_VENDOR_PHONE_ID)
  console.log("================================")
