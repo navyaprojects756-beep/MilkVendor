@@ -5,229 +5,349 @@
 <title>Vendor Dashboard</title>
 
 <style>
-
 body{
-  font-family: Arial;
-  background:#f5f6fa;
   margin:0;
+  font-family:Arial;
+  background:#f4f6f9;
+  display:flex;
 }
 
-.container{padding:10px;}
+/* SIDEBAR */
+.sidebar{
+  width:220px;
+  background:#2c3e50;
+  color:white;
+  height:100vh;
+  padding:15px;
+  position:fixed;
+  left:0;
+  top:0;
+  transition:0.3s;
+}
 
+.sidebar h2{margin-bottom:20px;}
+
+.sidebar button{
+  width:100%;
+  padding:10px;
+  margin-bottom:10px;
+  border:none;
+  background:#34495e;
+  color:white;
+  border-radius:6px;
+  cursor:pointer;
+}
+
+.sidebar button:hover{background:#1abc9c}
+
+/* MAIN */
+.main{
+  margin-left:220px;
+  flex:1;
+  padding:15px;
+}
+
+/* HEADER */
 .header{
   display:flex;
   justify-content:space-between;
   align-items:center;
 }
 
-.vendor-name{font-size:20px;font-weight:bold;}
-
 .btn{
   background:#2ecc71;
   color:white;
-  padding:10px;
   border:none;
+  padding:8px 12px;
   border-radius:6px;
+  cursor:pointer;
 }
 
+/* CARD */
 .card{
   background:white;
-  padding:12px;
-  margin-top:10px;
-  border-radius:8px;
-}
-
-/* FILTERS */
-.filters{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-}
-
-.filters input, .filters select{
-  padding:8px;
-  flex:1;
+  padding:15px;
+  margin-top:15px;
+  border-radius:10px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.1);
 }
 
 /* TABLE */
-.table-view{display:block;}
-
-table{width:100%;border-collapse:collapse;}
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:10px;
+}
 
 th{
   background:#2c3e50;
   color:white;
-  padding:8px;
+  padding:10px;
 }
 
-td{padding:8px;border-bottom:1px solid #ddd;}
-
-.order-card{display:none;}
-
-.card-row{
-  background:white;
+td{
   padding:10px;
-  margin-bottom:8px;
+  border-bottom:1px solid #ddd;
 }
 
 /* MOBILE */
 @media(max-width:768px){
-.table-view{display:none;}
-.order-card{display:block;}
+
+.sidebar{
+  left:-220px;
 }
 
+.sidebar.active{
+  left:0;
+}
+
+.main{
+  margin-left:0;
+}
+
+}
 </style>
 
 </head>
 
 <body>
 
-<div class="container">
+<div class="sidebar" id="sidebar">
+  <h2>Vendor</h2>
+  <button onclick="loadPage('orders')">Orders</button>
+  <button onclick="loadPage('apartments')">Apartments</button>
+  <button onclick="loadPage('blocks')">Blocks</button>
+  <button onclick="loadPage('settings')">Settings</button>
+</div>
+
+<div class="main">
 
 <div class="header">
- <div class="vendor-name" id="vendorName">Vendor</div>
- <button class="btn" onclick="generateOrders()">Generate</button>
+  <button class="btn" onclick="toggleMenu()">☰</button>
+  <h3 id="vendorName">Vendor</h3>
+  <button class="btn" onclick="generateOrders()">Generate</button>
 </div>
 
-<div class="card">
- <h3 id="total"></h3>
-</div>
-
-<div class="card filters">
- <input id="phoneSearch" placeholder="Phone" oninput="filterData()">
- <input id="addressSearch" placeholder="Address" oninput="filterData()">
- <select id="apartmentFilter" onchange="filterData()">
-  <option value="">All Apartments</option>
- </select>
-</div>
-
-<div class="card table-view">
-<table>
-<thead>
-<tr>
-<th>Phone</th>
-<th>Address</th>
-<th onclick="sortTable('quantity')">Packets</th>
-<th onclick="sortTable('date')">Date</th>
-</tr>
-</thead>
-<tbody id="orders"></tbody>
-</table>
-</div>
-
-<div id="mobileOrders" class="order-card"></div>
+<div id="content"></div>
 
 </div>
 
 <script>
-
 const token = new URLSearchParams(window.location.search).get("token")
 
-let allData=[]
-let filteredData=[]
+function toggleMenu(){
+ document.getElementById("sidebar").classList.toggle("active")
+}
+
+function loadPage(p){
+ if(p==="orders") loadOrders()
+ if(p==="apartments") loadApartments()
+ if(p==="blocks") loadBlocks()
+ if(p==="settings") loadSettings()
+}
+
+/* ---------------- ORDERS ---------------- */
 
 function loadOrders(){
-
  fetch(`/vendor/orders?token=${token}`)
- .then(res=>res.json())
+ .then(r=>r.json())
+ .then(d=>{
+  document.getElementById("vendorName").innerText="Welcome "+d.vendorName
+
+  let html=`<div class="card"><b>Total Tomorrow:</b> ${d.totalPackets}</div>
+  <div class="card"><table>
+  <tr><th>Phone</th><th>Address</th><th>Qty</th><th>Date</th></tr>`
+
+  d.orders.forEach(o=>{
+   html+=`<tr>
+   <td>${o.phone}</td>
+   <td>${o.address||""}</td>
+   <td>${o.quantity}</td>
+   <td>${new Date(o.order_date).toLocaleDateString()}</td>
+   </tr>`
+  })
+
+  html+="</table></div>"
+  content.innerHTML=html
+ })
+}
+
+/* ---------------- APARTMENTS ---------------- */
+
+function loadApartments(){
+ fetch(`/vendor/apartments?token=${token}`)
+ .then(r=>r.json())
  .then(data=>{
+  let html=`<div class="card">
+  <h3>Add Apartment</h3>
+  <input id="aptName" placeholder="Name">
+  <input id="aptAddress" placeholder="Address">
+  <button onclick="addApartment()">Add</button>
 
- document.getElementById("total").innerText =
- "Tomorrow Total: " + data.totalPackets
+  <table>
+  <tr><th>Name</th><th>Address</th><th>Status</th><th>Action</th></tr>`
 
- document.getElementById("vendorName").innerText =
- "Welcome " + data.vendorName
+  data.forEach(a=>{
+   html+=`<tr>
+   <td>${a.name}</td>
+   <td>${a.address}</td>
+   <td>${a.is_active?"ON":"OFF"}</td>
+   <td>
+   <button onclick="toggleApartment(${a.apartment_id})">Toggle</button>
+   <button onclick="deleteApartment(${a.apartment_id})">Delete</button>
+   </td></tr>`
+  })
 
- allData = data.orders
- filteredData = [...allData]
-
- loadApartmentFilter()
- render()
-
+  html+="</table></div>"
+  content.innerHTML=html
  })
-
 }
 
-function loadApartmentFilter(){
-
- const select=document.getElementById("apartmentFilter")
- select.innerHTML='<option value="">All Apartments</option>'
-
- const unique=[...new Set(allData.map(o=>o.apartment).filter(Boolean))]
-
- unique.forEach(a=>{
- select.innerHTML+=`<option value="${a}">${a}</option>`
+function addApartment(){
+ fetch(`/vendor/apartments?token=${token}`,{
+ method:"POST",
+ headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({
+  name:aptName.value,
+  address:aptAddress.value
  })
-
+ }).then(loadApartments)
 }
 
-function render(){
+function toggleApartment(id){
+ fetch(`/vendor/apartments/${id}/toggle?token=${token}`,{
+ method:"PATCH"
+ }).then(loadApartments)
+}
 
- const table=document.getElementById("orders")
- table.innerHTML=""
+function deleteApartment(id){
+ fetch(`/vendor/apartments/${id}?token=${token}`,{
+ method:"DELETE"
+ }).then(loadApartments)
+}
 
- const mobile=document.getElementById("mobileOrders")
- mobile.innerHTML=""
+/* ---------------- BLOCKS ---------------- */
 
- filteredData.forEach(o=>{
+function loadBlocks(){
+ fetch(`/vendor/apartments?token=${token}`)
+ .then(r=>r.json())
+ .then(apts=>{
+  let html=`<div class="card">
+  <h3>Blocks</h3>
 
- table.innerHTML+=`
- <tr>
- <td>${o.phone}</td>
- <td>${o.address || ""}</td>
- <td>${o.quantity}</td>
- <td>${new Date(o.order_date).toLocaleDateString()}</td>
- </tr>
- `
+  <select id="blockApt" onchange="loadBlockList(this.value)">
+  <option value="">Select Apartment</option>`
 
- mobile.innerHTML+=`
- <div class="card-row">
- <div>${o.phone}</div>
- <div>${o.address}</div>
- <div>${o.quantity} packets</div>
- </div>
- `
+  apts.forEach(a=>{
+   html+=`<option value="${a.apartment_id}">${a.name}</option>`
+  })
+
+  html+=`</select>
+
+  <input id="blockName" placeholder="Block Name">
+  <button onclick="addBlock()">Add</button>
+
+  <div id="blockList"></div>
+  </div>`
+
+  content.innerHTML=html
  })
-
 }
 
-function filterData(){
+function loadBlockList(id){
+ if(!id) return
 
- const phone=document.getElementById("phoneSearch").value
- const address=document.getElementById("addressSearch").value.toLowerCase()
- const apt=document.getElementById("apartmentFilter").value
+ fetch(`/vendor/blocks/${id}?token=${token}`)
+ .then(r=>r.json())
+ .then(data=>{
+  let html=`<table>
+  <tr><th>Block</th><th>Status</th><th>Action</th></tr>`
 
- filteredData = allData.filter(o =>
- o.phone.includes(phone) &&
- (o.address || "").toLowerCase().includes(address) &&
- (!apt || o.apartment===apt)
- )
+  data.forEach(b=>{
+   html+=`<tr>
+   <td>${b.block_name}</td>
+   <td>${b.is_active?"ON":"OFF"}</td>
+   <td>
+   <button onclick="toggleBlock(${b.block_id})">Toggle</button>
+   <button onclick="deleteBlock(${b.block_id})">Delete</button>
+   </td></tr>`
+  })
 
- render()
-
+  html+="</table>"
+  blockList.innerHTML=html
+ })
 }
 
-function sortTable(type){
+function addBlock(){
+ const apt = blockApt.value
+ if(!apt) return alert("Select apartment")
 
- if(type==="quantity")
- filteredData.sort((a,b)=>a.quantity-b.quantity)
-
- if(type==="date")
- filteredData.sort((a,b)=>new Date(a.order_date)-new Date(b.order_date))
-
- render()
-
+ fetch(`/vendor/blocks?token=${token}`,{
+ method:"POST",
+ headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({
+  apartment_id:apt,
+  block_name:blockName.value
+ })
+ }).then(()=>loadBlockList(apt))
 }
+
+function toggleBlock(id){
+ fetch(`/vendor/blocks/${id}/toggle?token=${token}`,{
+ method:"PATCH"
+ }).then(()=>{
+  loadBlockList(blockApt.value)
+ })
+}
+
+function deleteBlock(id){
+ fetch(`/vendor/blocks/${id}?token=${token}`,{
+ method:"DELETE"
+ }).then(()=>{
+  loadBlockList(blockApt.value)
+ })
+}
+
+/* ---------------- SETTINGS ---------------- */
+
+function loadSettings(){
+ fetch(`/vendor/settings?token=${token}`)
+ .then(r=>r.json())
+ .then(s=>{
+  content.innerHTML=`
+  <div class="card">
+  <h3>Settings</h3>
+
+  <label><input type="checkbox" id="apt" ${s.allow_apartments?"checked":""}> Apartments</label><br>
+  <label><input type="checkbox" id="house" ${s.allow_houses?"checked":""}> Houses</label><br>
+  <label><input type="checkbox" id="active" ${s.is_active?"checked":""}> Active</label><br>
+
+  <button onclick="saveSettings()">Save</button>
+  </div>`
+ })
+}
+
+function saveSettings(){
+ fetch(`/vendor/settings?token=${token}`,{
+ method:"POST",
+ headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({
+  allow_apartments:apt.checked,
+  allow_houses:house.checked,
+  is_active:active.checked
+ })
+ }).then(()=>alert("Saved"))
+}
+
+/* ---------------- GENERATE ---------------- */
 
 function generateOrders(){
-
  fetch(`/vendor/generate-orders?token=${token}`,{method:"POST"})
- .then(()=>loadOrders())
-
+ .then(loadOrders)
 }
 
-loadOrders()
-
+/* INIT */
+loadPage("orders")
 </script>
 
 </body>
