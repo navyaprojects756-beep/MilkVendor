@@ -4,13 +4,12 @@ const pool = require("../db")
 console.log("⏱ Order Cron Initialized")
 
 // Every 5 seconds
-cron.schedule("*/50 * * * * *", async () => {
+cron.schedule("*/55 * * * * *", async () => {
 
  try{
 
  console.log("🔄 Running order cron...")
 
- /* Insert orders for tomorrow based on subscriptions */
  await pool.query(`
  INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
  SELECT 
@@ -20,15 +19,23 @@ cron.schedule("*/50 * * * * *", async () => {
    s.quantity
  FROM subscriptions s
  WHERE s.status='active'
- AND NOT EXISTS (
-   SELECT 1 FROM orders o
-   WHERE o.customer_id = s.customer_id
-   AND o.vendor_id = s.vendor_id
-   AND o.order_date = CURRENT_DATE + 1
- )
+
+ ON CONFLICT (customer_id, vendor_id, order_date)
+ DO UPDATE SET quantity = EXCLUDED.quantity
  `)
 
- console.log("✅ Orders generated successfully")
+ await pool.query(`
+DELETE FROM orders o
+WHERE NOT EXISTS (
+ SELECT 1 FROM subscriptions s
+ WHERE s.customer_id=o.customer_id
+ AND s.vendor_id=o.vendor_id
+ AND s.status='active'
+)
+AND o.order_date = CURRENT_DATE + 1
+`)
+
+ console.log("✅ Orders upserted successfully")
 
  }
  catch(err){
