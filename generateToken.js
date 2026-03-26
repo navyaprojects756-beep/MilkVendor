@@ -5,7 +5,7 @@ const vendorId = "1009524062248491"
 
 const token = jwt.sign(
   { vendorId },
-  "mysecretkey",   // must match JWT_SECRET in .env
+  process.env.JWT_SECRET,
   { expiresIn: "2h" }
 )
 
