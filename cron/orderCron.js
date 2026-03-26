@@ -1,47 +1,35 @@
 const cron = require("node-cron")
 const pool = require("../db")
+const { generateOrdersForVendor } = require("../services/orderGenerator")
 
 console.log("⏱ Order Cron Initialized")
 
-// Every 5 seconds
-cron.schedule("*/5 * * * * *", async () => {
+// Runs every minute — fires generation only for vendors whose auto_generate_time matches HH:MM now
+cron.schedule("* * * * *", async () => {
+  try {
+    const now         = new Date()
+    const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`
 
- try{
+    const result = await pool.query(`
+      SELECT vendor_id
+      FROM vendor_settings
+      WHERE auto_generate_time IS NOT NULL
+        AND TO_CHAR(auto_generate_time, 'HH24:MI') = $1
+    `, [currentTime])
 
- console.log("🔄 Running order cron...")
+    if (result.rowCount === 0) return
 
- await pool.query(`
- INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
- SELECT 
-   s.customer_id,
-   s.vendor_id,
-   CURRENT_DATE + 1,
-   s.quantity
- FROM subscriptions s
- WHERE s.status='active'
+    console.log(`⏱ [${currentTime}] Auto-generating orders for ${result.rowCount} vendor(s)...`)
 
- ON CONFLICT (customer_id, vendor_id, order_date)
- DO UPDATE SET quantity = EXCLUDED.quantity
- `)
-
- await pool.query(`
-DELETE FROM orders o
-WHERE NOT EXISTS (
- SELECT 1 FROM subscriptions s
- WHERE s.customer_id=o.customer_id
- AND s.vendor_id=o.vendor_id
- AND s.status='active'
-)
-AND o.order_date = CURRENT_DATE + 1
-`)
-
- console.log("✅ Orders upserted successfully")
-
- }
- catch(err){
-
- console.log("❌ Cron Error:", err.message)
-
- }
-
+    for (const { vendor_id } of result.rows) {
+      try {
+        await generateOrdersForVendor(vendor_id)
+        console.log(`✅ Orders generated for vendor ${vendor_id}`)
+      } catch (err) {
+        console.error(`❌ Failed for vendor ${vendor_id}:`, err.message)
+      }
+    }
+  } catch (err) {
+    console.error("❌ Cron Error:", err.message)
+  }
 })

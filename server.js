@@ -1,8 +1,16 @@
+const cors = require("cors")
+const path = require("path")
 require("dotenv").config()
-require("./cron/orderCron")
-
 const express = require("express")
+
 const app = express()
+app.use(cors({
+  origin: process.env.CORS_ORIGIN,
+  credentials: true
+}))
+require("./cron/orderCron")
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')))
+
 
 // Bots
 const handleCustomerBot = require("./bots/customerBot")
