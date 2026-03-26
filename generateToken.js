@@ -1,3 +1,4 @@
+require("dotenv").config()
 const jwt = require("jsonwebtoken")
 
 const vendorId = "1009524062248491"
@@ -11,4 +12,4 @@ const token = jwt.sign(
 console.log("TOKEN:\n", token)
 
 console.log("\nURL:\n")
-console.log(`http://localhost:3000/vendor-dashboard.html?token=${token}`)
+console.log(`${process.env.APP_BASE_URL}?token=${token}`)
