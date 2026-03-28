@@ -6,7 +6,7 @@ const vendorId = "1009524062248491"
 const token = jwt.sign(
   { vendorId },
   process.env.JWT_SECRET,
-  { expiresIn: "2h" }
+  { expiresIn: "240h" }
 )
 
 console.log("TOKEN:\n", token)
