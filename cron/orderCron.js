@@ -2,6 +2,12 @@ const cron = require("node-cron")
 const pool = require("../db")
 const { generateOrdersForVendor } = require("../services/orderGenerator")
 
+if (process.env.RUN_CRON !== "true") {
+  console.log("⏱ Order Cron Disabled (RUN_CRON is not 'true')")
+  module.exports = {}
+  return
+}
+
 console.log("⏱ Order Cron Initialized")
 
 // Runs every minute — fires generation only for vendors whose auto_generate_time matches HH:MM now
