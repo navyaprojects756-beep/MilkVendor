@@ -49,8 +49,8 @@ function formatAddress(addr) {
   if (!addr) return "Not set"
   if (addr.address_type === "apartment") {
     const parts = []
-    if (addr.flat_number) parts.push(`Flat ${addr.flat_number}`)
-    if (addr.block_name) parts.push(`Block ${addr.block_name}`)
+    if (addr.flat_number)    parts.push(`Flat ${addr.flat_number}`)
+    if (addr.block_name)     parts.push(`Block ${addr.block_name}`)
     if (addr.apartment_name) parts.push(addr.apartment_name)
     return parts.length ? parts.join(", ") : "Apartment (incomplete)"
   }
@@ -59,18 +59,36 @@ function formatAddress(addr) {
 
 function isOrderWindowOpen(settings) {
   if (!settings.order_window_enabled) return true
-
   const now = new Date()
   const day = now.getDay()
   const activeDays = (settings.active_days || [0, 1, 2, 3, 4, 5, 6]).map(Number)
   if (!activeDays.includes(day)) return false
-
   if (!settings.order_accept_start || !settings.order_accept_end) return true
-
   const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m }
   const nowMins = now.getHours() * 60 + now.getMinutes()
   return nowMins >= toMins(settings.order_accept_start) && nowMins <= toMins(settings.order_accept_end)
 }
+
+/* ─── DATE HELPERS ─────────────────────────────────────── */
+
+function addDays(date, n) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + n)
+  return d
+}
+
+function dateToStr(date) {
+  return date.toISOString().split("T")[0] // YYYY-MM-DD
+}
+
+function displayDate(val) {
+  if (!val) return "—"
+  // pg returns DATE columns as JS Date objects (midnight UTC); strings come as "YYYY-MM-DD"
+  const iso = val instanceof Date ? val.toISOString() : String(val)
+  const [yr, mo, dy] = iso.slice(0, 10).split("-").map(Number)
+  return new Date(yr, mo - 1, dy).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+}
+
 
 /* ─── DB HELPERS ───────────────────────────────────────── */
 
@@ -95,11 +113,10 @@ async function getProfile(vendorId) {
 }
 
 async function getSubscription(cId, vId) {
-  const r = await pool.query(
+  return (await pool.query(
     "SELECT * FROM subscriptions WHERE customer_id=$1 AND vendor_id=$2",
     [cId, vId]
-  )
-  return r.rows[0] || null
+  )).rows[0] || null
 }
 
 async function saveSubscription(cId, vId, qty) {
@@ -154,42 +171,102 @@ async function setState(phone, state, vendorId, temp = {}) {
   `, [phone, state, vendorId, temp])
 }
 
+/* ─── PAUSE HELPERS ────────────────────────────────────── */
+
+async function getActivePause(cId, vId) {
+  const r = await pool.query(`
+    SELECT * FROM subscription_pauses
+    WHERE customer_id=$1 AND vendor_id=$2
+      AND (pause_until IS NULL OR pause_until >= CURRENT_DATE)
+    ORDER BY pause_from ASC LIMIT 1
+  `, [cId, vId])
+  return r.rows[0] || null
+}
+
+async function savePause(cId, vId, from, until) {
+  await pool.query(
+    "INSERT INTO subscription_pauses(customer_id, vendor_id, pause_from, pause_until) VALUES($1,$2,$3,$4)",
+    [cId, vId, from, until]
+  )
+}
+
+async function deletePause(pauseId) {
+  await pool.query("DELETE FROM subscription_pauses WHERE pause_id=$1", [pauseId])
+}
+
 /* ─── MENU SENDERS ─────────────────────────────────────── */
 
-async function sendMainMenu(pid, phone, sub, profile) {
-  const name = profile?.business_name || "Milk Service"
-  let rows
+async function sendMainMenu(pid, phone, sub, profile, pause = null) {
+  const name = (profile?.business_name || "Milk Service").trim()
+  let header, rows
 
   if (!sub) {
+    header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
       { id: "subscribe", title: "🥛 Subscribe Now", description: "Start daily milk delivery" }
     ]
-  } else if (sub.status === "active") {
+  } else if (sub.status === "active" && pause) {
+    const until = pause.pause_until
+      ? `until *${displayDate(pause.pause_until)}*`
+      : `— resumes when you're ready`
+    header = `🥛 *${name}*\n\n⏸ Delivery paused ${until}`
     rows = [
-      { id: "view",    title: "📋 My Subscription",  description: "View delivery details"    },
-      { id: "change",  title: "✏️ Change Quantity",   description: "Update daily packets"     },
-      { id: "profile", title: "📍 Update Address",    description: "Change delivery location" },
-      { id: "stop",    title: "⏸ Pause Delivery",     description: "Temporarily stop milk"    }
+      { id: "view",         title: "📋 My Subscription",  description: "View delivery details"     },
+      { id: "resume_pause", title: "▶️ Resume Now",        description: "End pause & restart delivery" },
+      { id: "profile",      title: "📍 Update Address",    description: "Change delivery location"  }
+    ]
+  } else if (sub.status === "active") {
+    header = `🥛 *${name}*\n\nHow can we help you today?`
+    rows = [
+      { id: "view",    title: "📋 My Subscription",  description: "View delivery details"       },
+      { id: "change",  title: "✏️ Change Quantity",   description: "Update daily packets"        },
+      { id: "profile", title: "📍 Update Address",    description: "Change delivery location"    },
+      { id: "pause",   title: "⏸ Pause Delivery",     description: "Skip delivery for some days" }
     ]
   } else {
+    header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
-      { id: "resume",  title: "▶️ Resume Delivery",  description: `Continue with ${sub.quantity} packet/day` },
-      { id: "change",  title: "✏️ Change & Resume",  description: "Pick new quantity and restart"            },
-      { id: "profile", title: "📍 Update Address",   description: "Change delivery location"                 }
+      { id: "resume",  title: "▶️ Resume Delivery",   description: `Continue with ${sub.quantity} packet/day` },
+      { id: "change",  title: "✏️ Change & Resume",   description: "Pick new quantity and restart"            },
+      { id: "profile", title: "📍 Update Address",    description: "Change delivery location"                 }
     ]
   }
 
-  await sendList(pid, phone, `🥛 *${name}*\n\nHow can we help you today?`, rows, "View Options")
+  await sendList(pid, phone, header, rows, "View Options")
 }
 
-async function sendQtyMenu(pid, phone, prefix, maxQty = 5) {
+async function sendQtyMenu(pid, phone, prefix, maxQty = 5, price = 0) {
   const limit = Math.min(maxQty, 5)
-  const rows = Array.from({ length: limit }, (_, i) => ({
-    id: `${prefix}_${i + 1}`,
-    title: `${i + 1} Packet${i + 1 > 1 ? "s" : ""}`,
-    description: `${i + 1} packet${i + 1 > 1 ? "s" : ""} delivered daily`
-  }))
+  const rows = Array.from({ length: limit }, (_, i) => {
+    const n = i + 1
+    const priceStr = price > 0 ? ` · ₹${price * n}/day` : ""
+    return {
+      id: `${prefix}_${n}`,
+      title: `${n} Packet${n > 1 ? "s" : ""} — 500ml each`,
+      description: `${n} × 500ml${priceStr}`
+    }
+  })
+  rows.push({ id: `${prefix}_custom`, title: "✏️ Custom Packets", description: "Enter any number of packets" })
   await sendList(pid, phone, "🥛 *Select Daily Quantity*\n\nHow many milk packets per day?", nav(rows), "Choose")
+}
+
+async function sendPauseMenu(pid, phone) {
+  await sendList(pid, phone,
+    "⏸ *Pause Delivery*\n\nHow long would you like to pause your delivery?",
+    [
+      { id: "pause_1",   title: "1 Day",           description: "Skip tomorrow's delivery only" },
+      { id: "pause_2",   title: "2 Days",           description: "Skip next 2 days"              },
+      { id: "pause_3",   title: "3 Days",           description: "Skip next 3 days"              },
+      { id: "pause_4",   title: "4 Days",           description: "Skip next 4 days"              },
+      { id: "pause_5",   title: "5 Days",           description: "Skip next 5 days"              },
+      { id: "pause_6",   title: "6 Days",           description: "Skip next 6 days"              },
+      { id: "pause_7",   title: "1 Week",           description: "Skip next 7 days"              },
+      { id: "pause_14",  title: "2 Weeks",          description: "Skip next 14 days"             },
+      { id: "pause_30",  title: "1 Month",          description: "Skip next 30 days"             },
+      { id: "pause_now", title: "⏸ Until I Resume", description: "No end date — resume manually" }
+    ],
+    "Select"
+  )
 }
 
 async function sendApartmentMenu(pid, phone, vendorId) {
@@ -222,7 +299,6 @@ async function sendBlockMenu(pid, phone, aptId) {
 
 /* ─── ADDRESS FLOW ─────────────────────────────────────── */
 
-// after_addr=true means: go to quantity selection after address is saved (new subscription flow)
 async function startAddressFlow(pid, phone, vendor, settings, afterAddr = false) {
   const temp = { after_addr: afterAddr }
   const allowApt   = settings.allow_apartments !== false
@@ -253,15 +329,32 @@ async function startAddressFlow(pid, phone, vendor, settings, afterAddr = false)
   }
 }
 
+async function confirmQty(pid, phone, cId, vId, qty, price, profile) {
+  await saveSubscription(cId, vId, qty)
+  const addr  = await getAddress(cId, vId)
+  const pause = await getActivePause(cId, vId)
+
+  let confirm = `✅ *Subscription Confirmed!*\n\n`
+  confirm += `🥛 *${qty} packet${qty > 1 ? "s" : ""}* × 500ml delivered every day\n`
+  if (price > 0) confirm += `💰 ₹${price * qty}/day\n`
+  confirm += `📍 ${formatAddress(addr)}\n\nDelivery starts tomorrow! 🎉`
+
+  await sendText(pid, phone, confirm)
+  const s = await getSubscription(cId, vId)
+  await setState(phone, "menu", vId)
+  await sendMainMenu(pid, phone, s, profile, pause)
+}
+
 async function afterAddressComplete(pid, phone, cId, vId, profile, settings, afterAddr) {
   if (afterAddr) {
     const maxQty = settings.max_quantity_per_order || 5
     await sendQtyMenu(pid, phone, "sub", maxQty)
     await setState(phone, "sub_qty", vId)
   } else {
-    const sub = await getSubscription(cId, vId)
+    const sub   = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
     await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, sub, profile)
+    await sendMainMenu(pid, phone, sub, profile, pause)
   }
 }
 
@@ -284,10 +377,10 @@ async function handleCustomerBot(msg, pid) {
 
   console.log("✅ Vendor:", vendor.vendor_id, vendor.vendor_name || "")
 
-  const customer  = await getCustomer(phone)
-  const state     = await getState(phone)
-  const settings  = await getSettings(vendor.vendor_id)
-  const profile   = await getProfile(vendor.vendor_id)
+  const customer = await getCustomer(phone)
+  const state    = await getState(phone)
+  const settings = await getSettings(vendor.vendor_id)
+  const profile  = await getProfile(vendor.vendor_id)
 
   console.log("👤 Customer:", customer.customer_id, "| State:", state?.state || "none")
 
@@ -302,13 +395,14 @@ async function handleCustomerBot(msg, pid) {
 
   /* ── Global: greetings and menu reset ── */
 
-  const isReset  = ["hi", "hello", "start"].includes(inputLower)
+  const isReset   = ["hi", "hello", "start"].includes(inputLower)
   const isMenuNav = inputLower === "menu"
 
   if (!state || isReset || isMenuNav) {
-    const sub  = await getSubscription(cId, vId)
-    const addr = await getAddress(cId, vId)
-    const name = profile?.business_name || "Milk Service"
+    const sub   = await getSubscription(cId, vId)
+    const addr  = await getAddress(cId, vId)
+    const pause = await getActivePause(cId, vId)
+    const name  = (profile?.business_name || "Milk Service").trim()
 
     if (!state || isReset) {
       const welcome = sub?.status === "active"
@@ -318,15 +412,17 @@ async function handleCustomerBot(msg, pid) {
     }
 
     await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, sub, profile)
+    await sendMainMenu(pid, phone, sub, profile, pause)
     return
   }
 
   /* ── Menu state ── */
 
   if (state.state === "menu") {
-    const sub = await getSubscription(cId, vId)
+    const sub   = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
 
+    // Subscribe (new or re-subscribe)
     if (input === "subscribe") {
       if (!isOrderWindowOpen(settings)) {
         const s = settings.order_accept_start || "N/A"
@@ -341,16 +437,15 @@ async function handleCustomerBot(msg, pid) {
         return
       }
       const maxQty = settings.max_quantity_per_order || 5
-      await sendQtyMenu(pid, phone, "sub", maxQty)
+      const price  = settings.price_per_unit || 0
+      await sendQtyMenu(pid, phone, "sub", maxQty, price)
       await setState(phone, "sub_qty", vId)
       return
     }
 
+    // View subscription
     if (input === "view") {
-      if (!sub) {
-        await sendMainMenu(pid, phone, sub, profile)
-        return
-      }
+      if (!sub) { await sendMainMenu(pid, phone, sub, profile, pause); return }
       const addr  = await getAddress(cId, vId)
       const price = settings.price_per_unit || 0
       let text = `📋 *Your Subscription*\n\n`
@@ -360,19 +455,28 @@ async function handleCustomerBot(msg, pid) {
         text += `📅 Monthly estimate: ₹${sub.quantity * price * 30}\n`
       }
       text += `📍 Address: ${formatAddress(addr)}\n`
-      text += `✅ Status: Active`
+      if (pause) {
+        text += pause.pause_until
+          ? `\n⏸ *Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}*`
+          : `\n⏸ *Paused (manual resume)*`
+      } else {
+        text += `\n✅ Status: Active`
+      }
       await sendText(pid, phone, text)
-      await sendMainMenu(pid, phone, sub, profile)
+      await sendMainMenu(pid, phone, sub, profile, pause)
       return
     }
 
+    // Change quantity
     if (input === "change") {
       const maxQty = settings.max_quantity_per_order || 5
-      await sendQtyMenu(pid, phone, "chg", maxQty)
+      const price  = settings.price_per_unit || 0
+      await sendQtyMenu(pid, phone, "chg", maxQty, price)
       await setState(phone, "chg_qty", vId)
       return
     }
 
+    // Update address
     if (input === "profile") {
       const addr = await getAddress(cId, vId)
       if (addr) await sendText(pid, phone, `📍 *Current Address:* ${formatAddress(addr)}\n\nSelect a new address below:`)
@@ -380,18 +484,26 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    if (input === "stop") {
-      await pool.query(
-        "UPDATE subscriptions SET status='inactive' WHERE customer_id=$1 AND vendor_id=$2",
-        [cId, vId]
-      )
-      await sendText(pid, phone, `⏸ *Delivery Paused*\n\nYour milk delivery has been paused.\nYou can resume anytime from the menu. 🥛`)
-      const s = await getSubscription(cId, vId)
-      await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, s, profile)
+    // Pause delivery — opens pause submenu
+    if (input === "pause") {
+      await sendPauseMenu(pid, phone)
+      await setState(phone, "pause_select", vId)
       return
     }
 
+    // Resume from pause (customer has active pause)
+    if (input === "resume_pause") {
+      if (pause) await deletePause(pause.pause_id)
+      const addr = await getAddress(cId, vId)
+      const qty  = sub?.quantity || 1
+      await sendText(pid, phone, `▶️ *Delivery Resumed!*\n\n🥛 *${qty} packet${qty > 1 ? "s" : ""}*/day starting tomorrow\n📍 ${formatAddress(addr)}\n\nSee you tomorrow! 🎉`)
+      const s = await getSubscription(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, s, profile, null)
+      return
+    }
+
+    // Resume inactive subscription
     if (input === "resume") {
       await pool.query(
         "UPDATE subscriptions SET status='active' WHERE customer_id=$1 AND vendor_id=$2",
@@ -402,42 +514,107 @@ async function handleCustomerBot(msg, pid) {
       await sendText(pid, phone, `▶️ *Delivery Resumed!*\n\n🥛 ${qty} packet${qty > 1 ? "s" : ""}/day will be delivered to:\n📍 ${formatAddress(addr)}\n\nSee you tomorrow! 🎉`)
       const s = await getSubscription(cId, vId)
       await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, s, profile)
+      await sendMainMenu(pid, phone, s, profile, null)
       return
     }
 
-    // Unrecognized tap/text in menu — redisplay menu
-    await sendMainMenu(pid, phone, sub, profile)
+    await sendMainMenu(pid, phone, sub, profile, pause)
     return
   }
 
   /* ── Quantity selection ── */
 
   if (state.state === "sub_qty" || state.state === "chg_qty") {
+    const prefix = state.state === "sub_qty" ? "sub" : "chg"
+    const maxQty = settings.max_quantity_per_order || 5
+    const price  = settings.price_per_unit || 0
+
+    // Custom option selected — ask user to type a number
+    if (input === `${prefix}_custom`) {
+      await sendText(pid, phone, `✏️ *Enter Number of Packets*\n\nType how many packets you want per day:\n(e.g. *6*, *8*, *10*)`)
+      await setState(phone, "custom_qty", vId, { prefix })
+      return
+    }
+
     const parts = input.split("_")
     const qty   = parseInt(parts[parts.length - 1])
 
     if (isNaN(qty) || qty < 1) {
       await sendText(pid, phone, "⚠️ Please choose a quantity from the list.")
-      const maxQty = settings.max_quantity_per_order || 5
-      await sendQtyMenu(pid, phone, state.state === "sub_qty" ? "sub" : "chg", maxQty)
+      await sendQtyMenu(pid, phone, prefix, maxQty, price)
       return
     }
 
-    await saveSubscription(cId, vId, qty)
-    const addr  = await getAddress(cId, vId)
-    const price = settings.price_per_unit || 0
+    await confirmQty(pid, phone, cId, vId, qty, price, profile)
+    return
+  }
 
-    let confirm = `✅ *Subscription Confirmed!*\n\n`
-    confirm += `🥛 *${qty} packet${qty > 1 ? "s" : ""}* delivered every day\n`
-    if (price > 0) confirm += `💰 ₹${price * qty}/day\n`
-    confirm += `📍 ${formatAddress(addr)}\n\n`
-    confirm += `Delivery starts tomorrow! 🎉`
+  /* ── Custom quantity text input ── */
 
-    await sendText(pid, phone, confirm)
-    const s = await getSubscription(cId, vId)
-    await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, s, profile)
+  if (state.state === "custom_qty") {
+    const qty    = parseInt(input.trim())
+    const price  = settings.price_per_unit || 0
+    const maxQty = settings.max_quantity_per_order || 0
+
+    if (isNaN(qty) || !/^\d+$/.test(input.trim())) {
+      await sendText(pid, phone, "⚠️ Please enter a valid number (e.g. *6*, *8*, *10*).")
+      return
+    }
+    if (qty < 1) {
+      await sendText(pid, phone, "⚠️ Minimum is 1 packet. Please enter a valid number:")
+      return
+    }
+    if (maxQty > 0 && qty > maxQty) {
+      await sendText(pid, phone, `⚠️ Maximum allowed is *${maxQty} packets* per day. Please enter a smaller number:`)
+      return
+    }
+
+    await confirmQty(pid, phone, cId, vId, qty, price, profile)
+    return
+  }
+
+  /* ── Pause selection ── */
+
+  if (state.state === "pause_select") {
+    const today    = new Date(); today.setHours(0, 0, 0, 0)
+    const tomorrow = addDays(today, 1)
+
+    const dayMatch = input.match(/^pause_(\d+)$/)
+    if (dayMatch) {
+      const days      = parseInt(dayMatch[1])
+      const from      = dateToStr(tomorrow)
+      const until     = dateToStr(addDays(tomorrow, days - 1))
+      const resumeDay = displayDate(dateToStr(addDays(tomorrow, days)))
+      const label     = days === 7 ? "1 Week" : days === 14 ? "2 Weeks" : days === 30 ? "1 Month" : `${days} Day${days > 1 ? "s" : ""}`
+      await savePause(cId, vId, from, until)
+      await sendText(pid, phone,
+        `⏸ *Delivery Paused for ${label}!*\n\n` +
+        `📅 From: ${displayDate(from)}\n` +
+        `📅 To: ${displayDate(until)}\n\n` +
+        `Delivery will resume automatically on *${resumeDay}*. 🥛`
+      )
+      const s = await getSubscription(cId, vId)
+      const p = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, s, profile, p)
+      return
+    }
+
+    if (input === "pause_now") {
+      const from = dateToStr(tomorrow)
+      await savePause(cId, vId, from, null)
+      await sendText(pid, phone,
+        `⏸ *Delivery Paused!*\n\n📅 Starting: ${displayDate(from)}\n\nWe'll wait for you. 🥛`
+      )
+      const s = await getSubscription(cId, vId)
+      const p = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, s, profile, p)
+      return
+    }
+
+    // Invalid tap — redisplay
+    await sendPauseMenu(pid, phone)
     return
   }
 
@@ -480,7 +657,6 @@ async function handleCustomerBot(msg, pid) {
       if (hasBlocks) {
         await setState(phone, "block", vId, temp)
       } else {
-        // No blocks configured — skip to flat number
         await sendText(pid, phone, "🏠 *Enter Your Flat Number*\n\n(e.g. A-101, 304, Ground Floor)")
         await setState(phone, "flat", vId, { ...temp, blockId: null })
       }
@@ -499,8 +675,8 @@ async function handleCustomerBot(msg, pid) {
       if (aptId) await sendBlockMenu(pid, phone, aptId)
       return
     }
-    const blockId    = input.split("_")[1]
-    const temp       = { ...state.temp_data, blockId }
+    const blockId     = input.split("_")[1]
+    const temp        = { ...state.temp_data, blockId }
     const requireFlat = settings.require_flat_number !== false
 
     if (requireFlat) {
@@ -538,7 +714,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
     if (address.length > 200) {
-      await sendText(pid, phone, "⚠️ Address is too long. Please keep it under 200 characters.")
+      await sendText(pid, phone, "⚠️ Address too long. Please keep it under 200 characters.")
       return
     }
     await saveManual(cId, vId, address)
@@ -547,11 +723,12 @@ async function handleCustomerBot(msg, pid) {
     return
   }
 
-  /* ── Fallback: reset to menu ── */
+  /* ── Fallback ── */
 
-  const sub = await getSubscription(cId, vId)
+  const sub   = await getSubscription(cId, vId)
+  const pause = await getActivePause(cId, vId)
   await setState(phone, "menu", vId)
-  await sendMainMenu(pid, phone, sub, profile)
+  await sendMainMenu(pid, phone, sub, profile, pause)
 }
 
 module.exports = handleCustomerBot

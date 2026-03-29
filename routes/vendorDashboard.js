@@ -637,4 +637,54 @@ router.get("/customers/:id/invoice", async (req, res) => {
   }
 })
 
+/* ─── PAUSES ─── */
+
+// GET /pauses — all active/upcoming pauses for this vendor
+router.get("/pauses", async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const r = await pool.query(`
+      SELECT
+        sp.pause_id,
+        sp.customer_id,
+        sp.pause_from,
+        sp.pause_until,
+        sp.created_at,
+        c.phone,
+        cv.address_type,
+        cv.flat_number,
+        cv.manual_address,
+        a.name       AS apartment_name,
+        b.block_name
+      FROM subscription_pauses sp
+      JOIN customers c ON c.customer_id = sp.customer_id
+      LEFT JOIN customer_vendor_profile cv
+        ON cv.customer_id = sp.customer_id AND cv.vendor_id = sp.vendor_id
+      LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
+      LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
+      WHERE sp.vendor_id = $1
+        AND (sp.pause_until IS NULL OR sp.pause_until >= CURRENT_DATE)
+      ORDER BY sp.pause_from ASC
+    `, [vendorId])
+    res.json(r.rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE /pauses/:pauseId — vendor resumes a customer early
+router.delete("/pauses/:pauseId", async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const result = await pool.query(
+      "DELETE FROM subscription_pauses WHERE pause_id=$1 AND vendor_id=$2 RETURNING pause_id",
+      [req.params.pauseId, vendorId]
+    )
+    if (result.rowCount === 0) return res.status(404).json({ error: "Pause not found" })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 module.exports = router
