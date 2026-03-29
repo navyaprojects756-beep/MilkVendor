@@ -5,13 +5,6 @@ const express = require("express")
 
 const app = express()
 app.set("etag", false)
-app.use((req, res, next) => {
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
-  res.setHeader("Pragma", "no-cache")
-  res.setHeader("Expires", "0")
-  res.setHeader("Surrogate-Control", "no-store")
-  next()
-})
 app.use(cors({
   origin: process.env.CORS_ORIGIN,
   credentials: true
@@ -31,7 +24,17 @@ const vendorDashboard = require("./routes/vendorDashboard")
 /* ---------------- MIDDLEWARE ---------------- */
 
 app.use(express.json({ limit: "10mb" }))
-app.use(express.static("public"))
+app.use(express.static("public", {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+      res.setHeader("Pragma", "no-cache")
+      res.setHeader("Expires", "0")
+    }
+  },
+}))
 app.use("/vendor", (req, res, next) => {
   res.set("Cache-Control", "no-store")
   next()
