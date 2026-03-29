@@ -452,7 +452,7 @@ async function handleCustomerBot(msg, pid) {
       text += `🥛 Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day\n`
       if (price > 0) {
         text += `💰 Rate: ₹${price} per packet\n`
-        text += `📅 Monthly estimate: ₹${sub.quantity * price * 30}\n`
+        text += `🗒 Monthly estimate: ₹${sub.quantity * price * 30}\n`
       }
       text += `📍 Address: ${formatAddress(addr)}\n`
       if (pause) {
@@ -589,8 +589,8 @@ async function handleCustomerBot(msg, pid) {
       await savePause(cId, vId, from, until)
       await sendText(pid, phone,
         `⏸ *Delivery Paused for ${label}!*\n\n` +
-        `📅 From: ${displayDate(from)}\n` +
-        `📅 To: ${displayDate(until)}\n\n` +
+        `🗒 From: ${displayDate(from)}\n` +
+        `🗒 To: ${displayDate(until)}\n\n` +
         `Delivery will resume automatically on *${resumeDay}*. 🥛`
       )
       const s = await getSubscription(cId, vId)
@@ -604,7 +604,7 @@ async function handleCustomerBot(msg, pid) {
       const from = dateToStr(tomorrow)
       await savePause(cId, vId, from, null)
       await sendText(pid, phone,
-        `⏸ *Delivery Paused!*\n\n📅 Starting: ${displayDate(from)}\n\nWe'll wait for you. 🥛`
+        `⏸ *Delivery Paused!*\n\n🗒 Starting: ${displayDate(from)}\n\nWe'll wait for you. 🥛`
       )
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
