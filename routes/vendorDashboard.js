@@ -7,6 +7,14 @@ const multer  = require("multer")
 const path    = require("path")
 const fs      = require("fs")
 
+/* ─── NO-CACHE (prevents carrier/proxy 304 on mobile networks) ─── */
+router.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+  res.setHeader("Pragma", "no-cache")
+  res.setHeader("Surrogate-Control", "no-store")
+  next()
+})
+
 /* ─── HELPER ─── */
 function getVendorId(req) {
   try {
