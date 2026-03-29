@@ -72,7 +72,7 @@ async function handleVendorBot(msg, phoneNumberId) {
 
   if (text === "hi" || text === "menu") {
     const token = generateVendorToken(vendor.vendor_id)
-    const link  = `${process.env.APP_BASE_URL}?token=${token}`
+    const link  = `${process.env.APP_BASE_URL}?token=${token}&t=${Date.now()}`
 
     await sendText(
       phoneNumberId,
