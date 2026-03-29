@@ -1,5 +1,6 @@
 const axios = require("axios")
 const pool = require("../db")
+const { generateInvoicePDF } = require("../services/invoicePDF")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
@@ -78,7 +79,10 @@ function addDays(date, n) {
 }
 
 function dateToStr(date) {
-  return date.toISOString().split("T")[0] // YYYY-MM-DD
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, "0")
+  const d = String(date.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
 }
 
 function displayDate(val) {
@@ -171,6 +175,102 @@ async function setState(phone, state, vendorId, temp = {}) {
   `, [phone, state, vendorId, temp])
 }
 
+/* ─── INVOICE HELPERS ──────────────────────────────────── */
+
+function getInvoiceDateRange(period) {
+  const now = new Date()
+  const y   = now.getFullYear()
+  const m   = now.getMonth()
+
+  if (period === "this_month") {
+    const from  = new Date(y, m, 1)
+    const to    = new Date(y, m + 1, 0)
+    return { from: dateToStr(from), to: dateToStr(to) }
+  }
+  if (period === "last_month") {
+    const from  = new Date(y, m - 1, 1)
+    const to    = new Date(y, m, 0)
+    return { from: dateToStr(from), to: dateToStr(to) }
+  }
+  if (period === "last_7") {
+    const to    = new Date(); to.setDate(to.getDate() - 1)
+    const from  = new Date(to); from.setDate(to.getDate() - 6)
+    return { from: dateToStr(from), to: dateToStr(to) }
+  }
+  if (period === "last_30") {
+    const to    = new Date(); to.setDate(to.getDate() - 1)
+    const from  = new Date(to); from.setDate(to.getDate() - 29)
+    return { from: dateToStr(from), to: dateToStr(to) }
+  }
+  return null
+}
+
+async function buildAndSendInvoice(pid, phone, cId, vId, from, to) {
+  const [custR, ordersR, settingsR, profileR] = await Promise.all([
+    pool.query(`
+      SELECT c.customer_id, c.phone,
+        CASE WHEN cv.address_type='apartment'
+        THEN a.name || COALESCE(' - '||b.block_name,'') || COALESCE(' - Flat '||cv.flat_number,'')
+        ELSE COALESCE(cv.manual_address,'') END AS address
+      FROM customers c
+      JOIN customer_vendor_profile cv ON cv.customer_id=c.customer_id AND cv.vendor_id=$2
+      LEFT JOIN apartments a ON cv.apartment_id=a.apartment_id
+      LEFT JOIN apartment_blocks b ON cv.block_id=b.block_id
+      WHERE c.customer_id=$1
+    `, [cId, vId]),
+    pool.query(
+      `SELECT order_date, quantity, is_delivered FROM orders
+       WHERE customer_id=$1 AND vendor_id=$2
+         AND order_date>=$3 AND order_date<=$4
+       ORDER BY order_date`,
+      [cId, vId, from, to]
+    ),
+    pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vId]),
+    pool.query("SELECT business_name, whatsapp_number, area, city FROM vendor_profile WHERE vendor_id=$1", [vId]),
+  ])
+
+  const data = {
+    customer:       custR.rows[0],
+    orders:         ordersR.rows,
+    price_per_unit: parseFloat(settingsR.rows[0]?.price_per_unit || 0),
+    vendor:         profileR.rows[0] || {},
+  }
+
+  const delivered = data.orders.filter(o => o.is_delivered)
+  if (delivered.length === 0) return false
+
+  const pdfBuffer = await generateInvoicePDF(data, from, to)
+  const filename  = `bill_${phone}_${from}_${to}.pdf`
+
+  // Upload PDF to WhatsApp Media
+  const blob     = new Blob([pdfBuffer], { type: "application/pdf" })
+  const formData = new FormData()
+  formData.append("file", blob, filename)
+  formData.append("type", "application/pdf")
+  formData.append("messaging_product", "whatsapp")
+
+  const uploadRes  = await fetch(
+    `https://graph.facebook.com/v21.0/${pid}/media`,
+    { method: "POST", headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }, body: formData }
+  )
+  const uploadData = await uploadRes.json()
+  if (!uploadRes.ok) throw new Error(uploadData.error?.message || "Media upload failed")
+
+  // Send as document
+  await sendWhatsApp(pid, {
+    messaging_product: "whatsapp",
+    to:   phone,
+    type: "document",
+    document: {
+      id:       uploadData.id,
+      filename,
+      caption: `🧾 Your milk bill (${displayDate(from)} – ${displayDate(to)})`
+    }
+  })
+
+  return true
+}
+
 /* ─── PAUSE HELPERS ────────────────────────────────────── */
 
 async function getActivePause(cId, vId) {
@@ -211,24 +311,27 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       : `— resumes when you're ready`
     header = `🥛 *${name}*\n\n⏸ Delivery paused ${until}`
     rows = [
-      { id: "view",         title: "📋 My Subscription",  description: "View delivery details"     },
-      { id: "resume_pause", title: "▶️ Resume Now",        description: "End pause & restart delivery" },
-      { id: "profile",      title: "📍 Update Address",    description: "Change delivery location"  }
+      { id: "view",         title: "📋 My Subscription",  description: "View delivery details"            },
+      { id: "resume_pause", title: "▶️ Resume Now",        description: "End pause & restart delivery"     },
+      { id: "profile",      title: "📍 Update Address",    description: "Change delivery location"         },
+      { id: "get_invoice",  title: "🧾 Get Bill",             description: "Receive your bill on WhatsApp"    }
     ]
   } else if (sub.status === "active") {
     header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
-      { id: "view",    title: "📋 My Subscription",  description: "View delivery details"       },
-      { id: "change",  title: "✏️ Change Quantity",   description: "Update daily packets"        },
-      { id: "profile", title: "📍 Update Address",    description: "Change delivery location"    },
-      { id: "pause",   title: "⏸ Pause Delivery",     description: "Skip delivery for some days" }
+      { id: "view",        title: "📋 My Subscription",  description: "View delivery details"       },
+      { id: "change",      title: "✏️ Change Quantity",   description: "Update daily packets"        },
+      { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"    },
+      { id: "pause",       title: "⏸ Pause Delivery",     description: "Skip delivery for some days" },
+      { id: "get_invoice", title: "🧾 Get Bill",            description: "Receive your bill on WhatsApp"    }
     ]
   } else {
     header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
-      { id: "resume",  title: "▶️ Resume Delivery",   description: `Continue with ${sub.quantity} packet/day` },
-      { id: "change",  title: "✏️ Change & Resume",   description: "Pick new quantity and restart"            },
-      { id: "profile", title: "📍 Update Address",    description: "Change delivery location"                 }
+      { id: "resume",      title: "▶️ Resume Delivery",   description: `Continue with ${sub.quantity} packet/day` },
+      { id: "change",      title: "✏️ Change & Resume",   description: "Pick new quantity and restart"            },
+      { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"                 },
+      { id: "get_invoice", title: "🧾 Get Invoice",        description: "Receive your invoice on WhatsApp"         }
     ]
   }
 
@@ -484,6 +587,23 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
+    // Get invoice
+    if (input === "get_invoice") {
+      await sendList(pid, phone,
+        "🧾 *Get Bill*\n\nSelect the period for your bill:",
+        [
+          { id: "inv_this_month", title: "This Month",   description: new Date().toLocaleString("en-IN", { month: "long", year: "numeric" }) },
+          { id: "inv_last_month", title: "Last Month",   description: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" }) },
+          { id: "inv_last_7",     title: "Last 7 Days",  description: "Past week's deliveries"  },
+          { id: "inv_last_30",    title: "Last 30 Days", description: "Past month's deliveries" },
+          { id: "menu",           title: "🏠 Main Menu",  description: ""                        },
+        ],
+        "Select"
+      )
+      await setState(phone, "invoice_period", vId)
+      return
+    }
+
     // Pause delivery — opens pause submenu
     if (input === "pause") {
       await sendPauseMenu(pid, phone)
@@ -720,6 +840,45 @@ async function handleCustomerBot(msg, pid) {
     await saveManual(cId, vId, address)
     await sendText(pid, phone, "✅ *Address Saved!*\n\nYour delivery address has been updated.")
     await afterAddressComplete(pid, phone, cId, vId, profile, settings, state.temp_data?.after_addr)
+    return
+  }
+
+  /* ── Invoice period selection ── */
+
+  if (state.state === "invoice_period") {
+    const periodMap = {
+      inv_this_month: "this_month",
+      inv_last_month: "last_month",
+      inv_last_7:     "last_7",
+      inv_last_30:    "last_30",
+    }
+    const period = periodMap[input]
+    if (!period) {
+      // Unknown input — go back to menu
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause)
+      return
+    }
+
+    const range = getInvoiceDateRange(period)
+    await sendText(pid, phone, `⏳ Generating your bill, please wait…`)
+
+    try {
+      const sent = await buildAndSendInvoice(pid, phone, cId, vId, range.from, range.to)
+      if (!sent) {
+        await sendText(pid, phone, `📭 No delivered orders found for this period.\n\nIf you think this is wrong, please contact your vendor.`)
+      }
+    } catch (err) {
+      console.error("Invoice send error:", err.message)
+      await sendText(pid, phone, `⚠️ Sorry, we couldn't generate your bill right now. Please try again later.`)
+    }
+
+    const sub   = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
+    await setState(phone, "menu", vId)
+    await sendMainMenu(pid, phone, sub, profile, pause)
     return
   }
 

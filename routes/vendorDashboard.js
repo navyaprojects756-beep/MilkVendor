@@ -578,6 +578,59 @@ router.get("/customers", async (req, res) => {
   }
 })
 
+/* ── PDF download (binary) — used by dashboard download & WhatsApp bot ── */
+router.get("/customers/:id/invoice/pdf", async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { from, to } = req.query
+    if (!from || !to) return res.status(400).json({ error: "from and to are required" })
+
+    const [custR, ordersR, settingsR, profileR] = await Promise.all([
+      pool.query(`
+        SELECT c.customer_id, c.phone,
+          CASE WHEN cv.address_type='apartment'
+          THEN a.name || COALESCE(' - '||b.block_name,'') || COALESCE(' - Flat '||cv.flat_number,'')
+          ELSE COALESCE(cv.manual_address,'') END AS address
+        FROM customers c
+        JOIN customer_vendor_profile cv ON cv.customer_id=c.customer_id AND cv.vendor_id=$2
+        LEFT JOIN apartments a ON cv.apartment_id=a.apartment_id
+        LEFT JOIN apartment_blocks b ON cv.block_id=b.block_id
+        WHERE c.customer_id=$1
+      `, [req.params.id, vendorId]),
+      pool.query(
+        `SELECT order_date, quantity, is_delivered FROM orders
+         WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4
+         ORDER BY order_date`,
+        [req.params.id, vendorId, from, to]
+      ),
+      pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vendorId]),
+      pool.query("SELECT business_name, whatsapp_number, area, city FROM vendor_profile WHERE vendor_id=$1", [vendorId]),
+    ])
+
+    if (custR.rowCount === 0) return res.status(404).json({ error: "Customer not found" })
+
+    const { generateInvoicePDF } = require("../services/invoicePDF")
+    const pdfBuffer = await generateInvoicePDF(
+      {
+        customer:       custR.rows[0],
+        orders:         ordersR.rows,
+        price_per_unit: parseFloat(settingsR.rows[0]?.price_per_unit || 0),
+        vendor:         profileR.rows[0] || {},
+      },
+      from, to
+    )
+
+    const filename = `bill_${custR.rows[0].phone}_${from}_${to}.pdf`
+    res.setHeader("Content-Type", "application/pdf")
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
+    res.send(pdfBuffer)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/* ── JSON data (used by dialog preview) ── */
 router.get("/customers/:id/invoice", async (req, res) => {
   try {
     const vendorId  = getVendorId(req)
