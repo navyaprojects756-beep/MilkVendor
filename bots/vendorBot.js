@@ -1,205 +1,160 @@
-const axios = require("axios")
 const pool = require("../db")
-
-const { generateVendorToken } = require("../services/vendorAuth")
+const axios = require("axios")
+const { generateVendorToken }    = require("../services/vendorAuth")
+const { generateOrdersForVendor } = require("../services/orderGenerator")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
-/* ---------------- SEND MESSAGE ---------------- */
+/* ─── SEND ─────────────────────────────────────────────── */
 
-async function sendText(phoneNumberId, phone, text){
-
- try{
-
- await axios.post(
- `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
- {
-  messaging_product:"whatsapp",
-  to:phone,
-  type:"text",
-  text:{body:text}
- },
- {
-  headers:{
-   Authorization:`Bearer ${WHATSAPP_TOKEN}`,
-   "Content-Type":"application/json"
+async function sendText(phoneNumberId, phone, text) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: phone,
+        type: "text",
+        text: { body: text }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    )
+  } catch (err) {
+    console.log("❌ WhatsApp Error:", err.response?.data || err.message)
   }
- }
- )
-
- }
- catch(err){
-
-  console.log("❌ WhatsApp Error")
-  console.log(err.response?.data || err.message)
-
- }
-
 }
 
-/* ---------------- GENERATE ORDERS ---------------- */
+/* ─── MAIN VENDOR BOT ──────────────────────────────────── */
 
-async function generateOrders(vendorId){
+async function handleVendorBot(msg, phoneNumberId) {
+  const phone = msg.from
 
- console.log("⚙️ Generating orders for vendor:", vendorId)
+  console.log("\n📩 Vendor message from:", phone)
 
- /* delete existing tomorrow orders */
- await pool.query(
- `DELETE FROM orders
-  WHERE vendor_id=$1
-  AND order_date=CURRENT_DATE + 1`,
- [vendorId]
- )
+  if (msg.type !== "text") return
 
- /* insert new orders from subscriptions */
- await pool.query(
- `
- INSERT INTO orders(customer_id,vendor_id,order_date,quantity)
- SELECT customer_id,vendor_id,CURRENT_DATE + 1,quantity
- FROM subscriptions
- WHERE vendor_id=$1
- AND status='active'
- `,
- [vendorId]
- )
+  const text = msg.text.body.toLowerCase().trim()
 
- console.log("✅ Orders generated")
-}
+  console.log("💬 Vendor text:", text)
 
-/* ---------------- MAIN VENDOR BOT ---------------- */
+  /* ── Fetch vendor ── */
 
-async function handleVendorBot(msg, phoneNumberId){
+  const vendorRes = await pool.query("SELECT * FROM vendors WHERE phone=$1", [phone])
+  const vendor = vendorRes.rows[0]
 
- const phone = msg.from
+  if (!vendor) {
+    console.log("❌ Vendor not found:", phone)
+    await sendText(phoneNumberId, phone, "❌ You are not registered as a vendor.\nPlease contact admin.")
+    return
+  }
 
- console.log("\n📩 Vendor message from:", phone)
+  if (!vendor.is_active) {
+    await sendText(phoneNumberId, phone, "⛔ Your account is currently inactive.\nPlease contact admin.")
+    return
+  }
 
- if(msg.type !== "text") return
+  console.log("✅ Vendor found:", vendor.vendor_id)
 
- const text = msg.text.body.toLowerCase().trim()
+  /* ── Fetch settings ── */
 
- console.log("💬 Vendor text:", text)
+  const settingsRes = await pool.query("SELECT * FROM vendor_settings WHERE vendor_id=$1", [vendor.vendor_id])
+  const settings = settingsRes.rows[0] || {}
 
- /* ---------------- FETCH VENDOR ---------------- */
+  const profileRes = await pool.query("SELECT * FROM vendor_profile WHERE vendor_id=$1", [vendor.vendor_id])
+  const profile = profileRes.rows[0] || {}
 
- const vendorRes = await pool.query(
-  "SELECT * FROM vendors WHERE phone=$1",
-  [phone]
- )
+  /* ── Commands ── */
 
- const vendor = vendorRes.rows[0]
+  if (text === "hi" || text === "menu") {
+    const token = generateVendorToken(vendor.vendor_id)
+    const link  = `${process.env.APP_BASE_URL}?token=${token}`
 
- if(!vendor){
+    await sendText(
+      phoneNumberId,
+      phone,
+      `👋 Welcome, ${vendor.vendor_name || "Vendor"}!\n\n` +
+      `📊 *Dashboard Link:*\n${link}\n\n` +
+      `_(Link valid for 2 hours)_\n\n` +
+      `⚙️ *Commands:*\n` +
+      `• menu — get dashboard link\n` +
+      `• generate — create tomorrow's orders\n` +
+      `• status — view current settings`
+    )
+    return
+  }
 
-  console.log("❌ Vendor not found")
+  if (text === "generate") {
+    try {
+      await generateOrdersForVendor(vendor.vendor_id)
 
-  await sendText(
-   phoneNumberId,
-   phone,
-   "❌ You are not registered as vendor.\nPlease contact admin."
-  )
+      const ordersRes = await pool.query(
+        "SELECT COUNT(*) AS total FROM orders WHERE vendor_id=$1 AND order_date=CURRENT_DATE + 1",
+        [vendor.vendor_id]
+      )
+      const total = ordersRes.rows[0]?.total || 0
 
-  return
- }
+      await sendText(
+        phoneNumberId,
+        phone,
+        `✅ *Orders Generated!*\n\n` +
+        `📦 Tomorrow's orders: *${total}*\n` +
+        `📅 Date: ${new Date(Date.now() + 86400000).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" })}\n\n` +
+        `Open dashboard to view details.`
+      )
+    } catch (err) {
+      console.log("❌ Order generation failed:", err.message)
+      await sendText(phoneNumberId, phone, "❌ Failed to generate orders. Please try again.")
+    }
+    return
+  }
 
- /* ---------------- CHECK STATUS ---------------- */
+  if (text === "status") {
+    const price       = settings.price_per_unit ? `₹${settings.price_per_unit}` : "Not set"
+    const autoTime    = settings.auto_generate_time
+      ? String(settings.auto_generate_time).slice(0, 5)
+      : "Not set"
+    const orderWindow = settings.order_window_enabled
+      ? `${String(settings.order_accept_start || "").slice(0, 5)} – ${String(settings.order_accept_end || "").slice(0, 5)}`
+      : "Always open"
 
- if(!vendor.is_active){
+    const subsRes = await pool.query(
+      "SELECT COUNT(*) AS total FROM subscriptions WHERE vendor_id=$1 AND status='active'",
+      [vendor.vendor_id]
+    )
+    const activeSubs = subsRes.rows[0]?.total || 0
 
-  await sendText(
-   phoneNumberId,
-   phone,
-   "⛔ Your account is currently inactive.\nPlease contact admin."
-  )
+    await sendText(
+      phoneNumberId,
+      phone,
+      `📊 *Vendor Status*\n\n` +
+      `🏪 ${profile.business_name || vendor.vendor_name || "Your Business"}\n` +
+      `✅ Account: Active\n\n` +
+      `📦 Active subscriptions: *${activeSubs}*\n` +
+      `💰 Price per packet: ${price}\n` +
+      `⏰ Order window: ${orderWindow}\n` +
+      `🔄 Auto-generate time: ${autoTime}\n\n` +
+      `Address types accepted:\n` +
+      `🏢 Apartments: ${settings.allow_apartments !== false ? "Yes" : "No"}\n` +
+      `🏠 Houses: ${settings.allow_houses !== false ? "Yes" : "No"}`
+    )
+    return
+  }
 
-  return
- }
-
- console.log("✅ Vendor found:", vendor.vendor_id)
-
- /* ---------------- FETCH SETTINGS ---------------- */
-
- const settingsRes = await pool.query(
-  "SELECT * FROM vendor_settings WHERE vendor_id=$1",
-  [vendor.vendor_id]
- )
-
- const settings = settingsRes.rows[0] || {}
-
- /* ---------------- COMMANDS ---------------- */
-
- if(text === "hi" || text === "menu"){
-
-  const token = generateVendorToken(vendor.vendor_id)
-
-  const link = `${process.env.APP_BASE_URL}?token=${token}`
-
-  await sendText(
-   phoneNumberId,
-   phone,
-   `👋 Welcome ${vendor.vendor_name || "Vendor"}
-
-📊 Dashboard:
-${link}
-
-⚙️ Commands:
-- menu → open dashboard
-- generate → generate tomorrow orders
-- status → view settings`
-  )
-
- }
-
- /* ---------------- GENERATE ORDERS ---------------- */
-
- else if(text === "generate"){
-
-  await generateOrders(vendor.vendor_id)
-
-  await sendText(
-   phoneNumberId,
-   phone,
-   "✅ Tomorrow orders generated successfully!"
-  )
-
- }
-
- /* ---------------- STATUS ---------------- */
-
- else if(text === "status"){
+  /* ── Default help ── */
 
   await sendText(
-   phoneNumberId,
-   phone,
-   `📊 Vendor Status
-
-Name: ${vendor.vendor_name || "Vendor"}
-Active: ${vendor.is_active ? "Yes" : "No"}
-
-Settings:
-Apartments: ${settings.allow_apartments !== false ? "Enabled" : "Disabled"}
-Houses: ${settings.allow_houses !== false ? "Enabled" : "Disabled"}`
+    phoneNumberId,
+    phone,
+    `❓ *Unknown command*\n\nAvailable commands:\n` +
+    `• menu — open dashboard\n` +
+    `• generate — create tomorrow's orders\n` +
+    `• status — view settings`
   )
-
- }
-
- /* ---------------- HELP ---------------- */
-
- else{
-
-  await sendText(
-   phoneNumberId,
-   phone,
-   `❓ Unknown command
-
-Try:
-menu
-generate
-status`
-  )
-
- }
-
 }
 
 module.exports = handleVendorBot
