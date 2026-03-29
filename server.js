@@ -4,12 +4,23 @@ require("dotenv").config()
 const express = require("express")
 
 const app = express()
+app.set("etag", false)
+app.use((req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+  res.setHeader("Pragma", "no-cache")
+  res.setHeader("Expires", "0")
+  res.setHeader("Surrogate-Control", "no-store")
+  next()
+})
 app.use(cors({
   origin: process.env.CORS_ORIGIN,
   credentials: true
 }))
 require("./cron/orderCron")
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')))
+
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads'), {
+  maxAge: "7d"
+}))
 
 
 // Bots
@@ -21,6 +32,10 @@ const vendorDashboard = require("./routes/vendorDashboard")
 
 app.use(express.json({ limit: "10mb" }))
 app.use(express.static("public"))
+app.use("/vendor", (req, res, next) => {
+  res.set("Cache-Control", "no-store")
+  next()
+})
 app.use("/vendor", vendorDashboard)
 
 /* ---------------- CONFIG ---------------- */
