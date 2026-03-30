@@ -541,7 +541,7 @@ async function handleCustomerBot(msg, pid) {
   // Allow null input only in payment_screenshot state (customer may send an image)
   if (!input && state?.state !== "payment_screenshot") return
 
-  const inputLower = input.toLowerCase()
+  const inputLower = (input || "").toLowerCase()
   const vId = vendor.vendor_id
   const cId = customer.customer_id
 
