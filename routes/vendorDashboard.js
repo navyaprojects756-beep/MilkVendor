@@ -141,19 +141,23 @@ router.get("/orders", async (req, res) => {
       [vendorId]
     )
 
-    // For delivery role: mask phone numbers if vendor setting says so
+    // For delivery role: mask phone numbers based on vendor setting (if column exists)
     let orders = result.rows
     if (role === "delivery") {
-      const settingsRes = await pool.query(
-        "SELECT show_phone_numbers FROM vendor_settings WHERE vendor_id = $1",
-        [vendorId]
-      )
-      const showPhone = settingsRes.rows[0]?.show_phone_numbers !== false
-      if (!showPhone) {
-        orders = orders.map((o) => ({
-          ...o,
-          phone: `••••••• ${String(o.phone).slice(-3)}`,
-        }))
+      try {
+        const settingsRes = await pool.query(
+          "SELECT show_phone_numbers FROM vendor_settings WHERE vendor_id = $1",
+          [vendorId]
+        )
+        const showPhone = settingsRes.rows[0]?.show_phone_numbers !== false
+        if (!showPhone) {
+          orders = orders.map((o) => ({
+            ...o,
+            phone: `••••••• ${String(o.phone).slice(-3)}`,
+          }))
+        }
+      } catch {
+        // show_phone_numbers column not yet in DB — show phones by default
       }
     }
 
