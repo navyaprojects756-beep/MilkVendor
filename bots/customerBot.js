@@ -561,10 +561,30 @@ async function handleCustomerBot(msg, pid) {
         ? `👋 *Welcome back!*\n\nYour delivery: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}/day*\n📍 ${formatAddress(addr)}`
         : `👋 *Welcome to ${name}!*\n\nFresh milk delivered to your doorstep every day. 🥛`
       await sendText(pid, phone, welcome)
+
+      // If window is closed, show a notice alongside the menu
+      if (!isOrderWindowOpen(settings)) {
+        const s = settings.order_accept_start || "—"
+        const e = settings.order_accept_end   || "—"
+        await sendText(pid, phone,
+          `⏰ *Order window is currently closed.*\n\nWe accept messages from *${s}* to *${e}*.\n\nChanges can only be made during order hours.`
+        )
+      }
     }
 
     await setState(phone, "menu", vId)
     await sendMainMenu(pid, phone, sub, profile, pause)
+    return
+  }
+
+  /* ── Block all actions outside order window ── */
+
+  if (!isOrderWindowOpen(settings)) {
+    const s = settings.order_accept_start || "—"
+    const e = settings.order_accept_end   || "—"
+    await sendText(pid, phone,
+      `⏰ *Sorry, we are not accepting messages right now.*\n\nOur order window is open from *${s}* to *${e}*.\n\nPlease message us during those hours and we'll be happy to help! 🙏`
+    )
     return
   }
 
@@ -576,12 +596,6 @@ async function handleCustomerBot(msg, pid) {
 
     // Subscribe (new or re-subscribe)
     if (input === "subscribe") {
-      if (!isOrderWindowOpen(settings)) {
-        const s = settings.order_accept_start || "N/A"
-        const e = settings.order_accept_end   || "N/A"
-        await sendText(pid, phone, `⏰ *Orders Closed*\n\nWe accept orders between *${s}* and *${e}*.\n\nPlease try again during order hours!`)
-        return
-      }
       const addr = await getAddress(cId, vId)
       if (!addr) {
         await sendText(pid, phone, "📍 *First, let's save your delivery address.*\n\nThis only takes a moment!")
