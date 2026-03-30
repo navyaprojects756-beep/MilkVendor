@@ -667,20 +667,22 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Pay bill
+    // Pay bill — first pick period, then show bill + total, then pay
     if (input === "pay_bill") {
+      const now = new Date()
+      const thisMonth = now.toLocaleString("en-IN", { month: "long", year: "numeric" })
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+        .toLocaleString("en-IN", { month: "long", year: "numeric" })
       await sendList(pid, phone,
-        "💳 *Report Payment*\n\nHow did you make the payment?",
+        "💳 *Pay Bill*\n\nWhich period's bill would you like to pay?",
         [
-          { id: "pm_cash",    title: "💵 Cash",     description: "Paid cash to delivery person" },
-          { id: "pm_phonePe", title: "📱 PhonePe",  description: "Paid via PhonePe"             },
-          { id: "pm_upi",     title: "🔗 UPI",      description: "Google Pay / other UPI"       },
-          { id: "pm_other",   title: "🏦 Other",    description: "Bank transfer or other"       },
-          { id: "menu",       title: "🏠 Main Menu", description: ""                             },
+          { id: "pay_this_month", title: "This Month",  description: thisMonth },
+          { id: "pay_last_month", title: "Last Month",  description: lastMonth },
+          { id: "menu",           title: "🏠 Main Menu", description: ""        },
         ],
         "Select"
       )
-      await setState(phone, "payment_method", vId)
+      await setState(phone, "pay_period", vId)
       return
     }
 
@@ -962,6 +964,102 @@ async function handleCustomerBot(msg, pid) {
     return
   }
 
+  /* ── Pay bill: period selection ── */
+
+  if (state.state === "pay_period") {
+    const periodMap = { pay_this_month: "this_month", pay_last_month: "last_month" }
+    const period = periodMap[input]
+
+    if (!period) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause)
+      return
+    }
+
+    const range = getInvoiceDateRange(period)
+    await sendText(pid, phone, `⏳ Fetching your bill, please wait…`)
+
+    // Calculate delivered total for the period
+    const [ordersR, settingsR] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(quantity), 0) AS total_qty
+         FROM orders
+         WHERE customer_id=$1 AND vendor_id=$2
+           AND order_date>=$3 AND order_date<=$4
+           AND is_delivered=true`,
+        [cId, vId, range.from, range.to]
+      ),
+      pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vId]),
+    ])
+
+    const totalQty    = parseInt(ordersR.rows[0].total_qty)
+    const pricePerUnit = parseFloat(settingsR.rows[0]?.price_per_unit || 0)
+    const totalAmount  = totalQty * pricePerUnit
+
+    if (totalQty === 0) {
+      await sendText(pid, phone, `📭 No delivered orders found for this period.\n\nIf you think this is wrong, please contact your vendor.`)
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause)
+      return
+    }
+
+    // Send PDF bill
+    try {
+      await buildAndSendInvoice(pid, phone, cId, vId, range.from, range.to)
+    } catch (err) {
+      console.error("Bill send error:", err.message)
+    }
+
+    const periodLabel = period === "this_month" ? "This Month" : "Last Month"
+
+    // Show summary + ask to mark as paid
+    await sendList(pid, phone,
+      `📊 *Bill Summary — ${periodLabel}*\n\n` +
+      `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
+      `📦 Delivered: *${totalQty} packet${totalQty > 1 ? "s" : ""}*\n` +
+      `💰 Rate: ₹${pricePerUnit}/packet\n` +
+      `🧾 *Total Due: ₹${totalAmount.toFixed(2)}*\n\n` +
+      `Would you like to mark this bill as paid?`,
+      [
+        { id: "confirm_pay", title: "✅ Mark as Paid",  description: `Record ₹${totalAmount.toFixed(2)} payment` },
+        { id: "menu",        title: "🏠 Main Menu",     description: "No, go back"                              },
+      ],
+      "Select"
+    )
+    await setState(phone, "pay_confirm", vId, { from: range.from, to: range.to, totalAmount, periodLabel })
+    return
+  }
+
+  /* ── Pay bill: confirm → go to payment method ── */
+
+  if (state.state === "pay_confirm") {
+    if (input !== "confirm_pay") {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause)
+      return
+    }
+
+    await sendList(pid, phone,
+      "💳 *How did you make the payment?*",
+      [
+        { id: "pm_cash",    title: "💵 Cash",     description: "Paid cash to delivery person" },
+        { id: "pm_phonePe", title: "📱 PhonePe",  description: "Paid via PhonePe"             },
+        { id: "pm_upi",     title: "🔗 UPI",      description: "Google Pay / other UPI"       },
+        { id: "pm_other",   title: "🏦 Other",    description: "Bank transfer or other"       },
+        { id: "menu",       title: "🏠 Main Menu", description: ""                             },
+      ],
+      "Select"
+    )
+    await setState(phone, "payment_method", vId, state.temp_data)
+    return
+  }
+
   /* ── Payment method selection ── */
 
   if (state.state === "payment_method") {
@@ -974,8 +1072,14 @@ async function handleCustomerBot(msg, pid) {
       await sendMainMenu(pid, phone, sub, profile, pause)
       return
     }
-    await setState(phone, "payment_amount", vId, { method })
-    await sendText(pid, phone, `💰 *Enter Payment Amount*\n\nHow much did you pay? (in ₹)\n\nExample: *500*`)
+
+    const { totalAmount } = state.temp_data || {}
+    const hint    = totalAmount ? `\n\n💡 Bill total: ₹${Number(totalAmount).toFixed(2)}` : ""
+    const example = totalAmount ? Math.round(totalAmount) : "500"
+    await setState(phone, "payment_amount", vId, { ...state.temp_data, method })
+    await sendText(pid, phone,
+      `💰 *Enter Payment Amount*${hint}\n\nHow much did you pay? (in ₹)\n\nExample: *${example}*`
+    )
     return
   }
 
@@ -988,7 +1092,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
     const method = state.temp_data?.method || "other"
-    await setState(phone, "payment_screenshot", vId, { method, amount })
+    await setState(phone, "payment_screenshot", vId, { ...state.temp_data, method, amount })
     await sendText(pid, phone,
       `📸 *Payment Screenshot (Optional)*\n\n` +
       `Send a screenshot of your payment for verification.\n\n` +
@@ -1000,12 +1104,12 @@ async function handleCustomerBot(msg, pid) {
   /* ── Payment screenshot (image or skip) ── */
 
   if (state.state === "payment_screenshot") {
-    const { method, amount } = state.temp_data || {}
+    const { method, amount, periodLabel } = state.temp_data || {}
     let screenshotUrl = null
 
     if (msg.type === "image" && msg.image?.id) {
       screenshotUrl = await downloadWhatsAppMedia(msg.image.id)
-    } else if (input && input.toLowerCase() !== "skip") {
+    } else if (input && inputLower !== "skip") {
       await sendText(pid, phone, "📎 Please send an image OR type *skip* to continue without a screenshot.")
       return
     }
@@ -1023,15 +1127,13 @@ async function handleCustomerBot(msg, pid) {
     const label = PAYMENT_LABELS[method] || method
     await sendText(pid, phone,
       `✅ *Payment Recorded!*\n\n` +
+      `${periodLabel ? `📅 Period: ${periodLabel}\n` : ""}` +
       `💰 Amount: ₹${amount}\n` +
       `💳 Method: ${label}\n\n` +
       `Thank you! Your vendor has been notified. 🙏`
     )
-    const sub   = await getSubscription(cId, vId)
-    const pause = await getActivePause(cId, vId)
     await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, sub, profile, pause)
-    return
+    return   // no menu push — clean end after payment
   }
 
   /* ── Fallback ── */
