@@ -1,5 +1,7 @@
 const axios = require("axios")
-const pool = require("../db")
+const path  = require("path")
+const fs    = require("fs")
+const pool  = require("../db")
 const { generateInvoicePDF } = require("../services/invoicePDF")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
@@ -294,6 +296,49 @@ async function deletePause(pauseId) {
   await pool.query("DELETE FROM subscription_pauses WHERE pause_id=$1", [pauseId])
 }
 
+/* ─── PAYMENT HELPERS ──────────────────────────────────── */
+
+const PAYMENT_LABELS = { cash: "Cash", phonePe: "PhonePe", upi: "UPI", other: "Other" }
+
+async function downloadWhatsAppMedia(mediaId) {
+  try {
+    const metaRes = await axios.get(
+      `https://graph.facebook.com/v18.0/${mediaId}`,
+      { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+    )
+    const mediaUrl = metaRes.data.url
+    const imgRes = await axios.get(mediaUrl, {
+      responseType: "arraybuffer",
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+    })
+    const filename = `pay_wa_${Date.now()}.jpg`
+    const savePath = path.join(__dirname, "../public/uploads/payments", filename)
+    if (!fs.existsSync(path.dirname(savePath))) fs.mkdirSync(path.dirname(savePath), { recursive: true })
+    fs.writeFileSync(savePath, imgRes.data)
+    return `/uploads/payments/${filename}`
+  } catch (err) {
+    console.error("Media download error:", err.message)
+    return null
+  }
+}
+
+async function notifyVendorPayment(pid, vendor, customerPhone, amount, method, screenshotUrl) {
+  try {
+    const label = PAYMENT_LABELS[method] || method
+    const msg =
+      `💳 *Payment Reported by Customer!*\n\n` +
+      `📱 Customer: +${customerPhone}\n` +
+      `💰 Amount: ₹${amount}\n` +
+      `💳 Method: ${label}\n` +
+      `📅 Date: ${new Date().toLocaleDateString("en-IN")}\n\n` +
+      `${screenshotUrl ? "📸 Screenshot saved.\n\n" : ""}` +
+      `Check your dashboard for details.`
+    await sendText(pid, vendor.phone, msg)
+  } catch (err) {
+    console.error("Vendor payment notification error:", err.message)
+  }
+}
+
 /* ─── MENU SENDERS ─────────────────────────────────────── */
 
 async function sendMainMenu(pid, phone, sub, profile, pause = null) {
@@ -314,7 +359,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       { id: "view",         title: "📋 My Subscription",  description: "View delivery details"            },
       { id: "resume_pause", title: "▶️ Resume Now",        description: "End pause & restart delivery"     },
       { id: "profile",      title: "📍 Update Address",    description: "Change delivery location"         },
-      { id: "get_invoice",  title: "🧾 Get Bill",             description: "Receive your bill on WhatsApp"    }
+      { id: "get_invoice",  title: "🧾 Get Bill",          description: "Receive your bill on WhatsApp"    },
+      { id: "pay_bill",     title: "💳 Pay Bill",          description: "Report your payment"              },
     ]
   } else if (sub.status === "active") {
     header = `🥛 *${name}*\n\nHow can we help you today?`
@@ -323,7 +369,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       { id: "change",      title: "✏️ Change Quantity",   description: "Update daily packets"        },
       { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"    },
       { id: "pause",       title: "⏸ Pause Delivery",     description: "Skip delivery for some days" },
-      { id: "get_invoice", title: "🧾 Get Bill",            description: "Receive your bill on WhatsApp"    }
+      { id: "get_invoice", title: "🧾 Get Bill",           description: "Receive your bill on WhatsApp" },
+      { id: "pay_bill",    title: "💳 Pay Bill",           description: "Report your payment"         },
     ]
   } else {
     header = `🥛 *${name}*\n\nHow can we help you today?`
@@ -331,7 +378,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       { id: "resume",      title: "▶️ Resume Delivery",   description: `Continue with ${sub.quantity} packet/day` },
       { id: "change",      title: "✏️ Change & Resume",   description: "Pick new quantity and restart"            },
       { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"                 },
-      { id: "get_invoice", title: "🧾 Get Invoice",        description: "Receive your invoice on WhatsApp"         }
+      { id: "get_invoice", title: "🧾 Get Invoice",        description: "Receive your invoice on WhatsApp"         },
+      { id: "pay_bill",    title: "💳 Pay Bill",           description: "Report your payment"                      },
     ]
   }
 
@@ -490,7 +538,8 @@ async function handleCustomerBot(msg, pid) {
   let input = null
   if (msg.type === "text")        input = msg.text?.body?.trim()
   if (msg.type === "interactive") input = msg.interactive?.list_reply?.id
-  if (!input) return
+  // Allow null input only in payment_screenshot state (customer may send an image)
+  if (!input && state?.state !== "payment_screenshot") return
 
   const inputLower = input.toLowerCase()
   const vId = vendor.vendor_id
@@ -601,6 +650,23 @@ async function handleCustomerBot(msg, pid) {
         "Select"
       )
       await setState(phone, "invoice_period", vId)
+      return
+    }
+
+    // Pay bill
+    if (input === "pay_bill") {
+      await sendList(pid, phone,
+        "💳 *Report Payment*\n\nHow did you make the payment?",
+        [
+          { id: "pm_cash",    title: "💵 Cash",     description: "Paid cash to delivery person" },
+          { id: "pm_phonePe", title: "📱 PhonePe",  description: "Paid via PhonePe"             },
+          { id: "pm_upi",     title: "🔗 UPI",      description: "Google Pay / other UPI"       },
+          { id: "pm_other",   title: "🏦 Other",    description: "Bank transfer or other"       },
+          { id: "menu",       title: "🏠 Main Menu", description: ""                             },
+        ],
+        "Select"
+      )
+      await setState(phone, "payment_method", vId)
       return
     }
 
@@ -875,6 +941,78 @@ async function handleCustomerBot(msg, pid) {
       await sendText(pid, phone, `⚠️ Sorry, we couldn't generate your bill right now. Please try again later.`)
     }
 
+    const sub   = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
+    await setState(phone, "menu", vId)
+    await sendMainMenu(pid, phone, sub, profile, pause)
+    return
+  }
+
+  /* ── Payment method selection ── */
+
+  if (state.state === "payment_method") {
+    const methodMap = { pm_cash: "cash", pm_phonePe: "phonePe", pm_upi: "upi", pm_other: "other" }
+    const method = methodMap[input]
+    if (!method) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause)
+      return
+    }
+    await setState(phone, "payment_amount", vId, { method })
+    await sendText(pid, phone, `💰 *Enter Payment Amount*\n\nHow much did you pay? (in ₹)\n\nExample: *500*`)
+    return
+  }
+
+  /* ── Payment amount entry ── */
+
+  if (state.state === "payment_amount") {
+    const amount = parseFloat(input.replace(/[^0-9.]/g, ""))
+    if (isNaN(amount) || amount <= 0) {
+      await sendText(pid, phone, "⚠️ Please enter a valid amount. Example: *500*")
+      return
+    }
+    const method = state.temp_data?.method || "other"
+    await setState(phone, "payment_screenshot", vId, { method, amount })
+    await sendText(pid, phone,
+      `📸 *Payment Screenshot (Optional)*\n\n` +
+      `Send a screenshot of your payment for verification.\n\n` +
+      `📎 Send an image, OR type *skip* to finish without one.`
+    )
+    return
+  }
+
+  /* ── Payment screenshot (image or skip) ── */
+
+  if (state.state === "payment_screenshot") {
+    const { method, amount } = state.temp_data || {}
+    let screenshotUrl = null
+
+    if (msg.type === "image" && msg.image?.id) {
+      screenshotUrl = await downloadWhatsAppMedia(msg.image.id)
+    } else if (input && input.toLowerCase() !== "skip") {
+      await sendText(pid, phone, "📎 Please send an image OR type *skip* to continue without a screenshot.")
+      return
+    }
+
+    // Record payment
+    await pool.query(`
+      INSERT INTO payments
+        (customer_id, vendor_id, amount, payment_method, screenshot_url, recorded_by, payment_date)
+      VALUES ($1, $2, $3, $4, $5, 'customer', CURRENT_DATE)
+    `, [cId, vId, amount, method || "other", screenshotUrl])
+
+    // Notify vendor
+    await notifyVendorPayment(pid, vendor, customer.phone, amount, method, screenshotUrl)
+
+    const label = PAYMENT_LABELS[method] || method
+    await sendText(pid, phone,
+      `✅ *Payment Recorded!*\n\n` +
+      `💰 Amount: ₹${amount}\n` +
+      `💳 Method: ${label}\n\n` +
+      `Thank you! Your vendor has been notified. 🙏`
+    )
     const sub   = await getSubscription(cId, vId)
     const pause = await getActivePause(cId, vId)
     await setState(phone, "menu", vId)

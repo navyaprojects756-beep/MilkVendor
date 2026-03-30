@@ -49,6 +49,25 @@ function requireAdmin(req, res, next) {
 const uploadDir = path.join(__dirname, "../public/uploads/images/logo")
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
 
+const paymentUploadDir = path.join(__dirname, "../public/uploads/payments")
+if (!fs.existsSync(paymentUploadDir)) fs.mkdirSync(paymentUploadDir, { recursive: true })
+
+const paymentStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, paymentUploadDir),
+  filename:    (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    cb(null, `pay_${Date.now()}${ext}`)
+  },
+})
+const uploadPayment = multer({
+  storage: paymentStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith("image/")) return cb(new Error("Images only"))
+    cb(null, true)
+  },
+})
+
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
 
 const storage = multer.diskStorage({
@@ -792,6 +811,129 @@ router.get("/customers/:id/invoice", requireAdmin, async (req, res) => {
       price_per_unit: parseFloat(settings.rows[0]?.price_per_unit || 0),
       vendor:         profile.rows[0] || {},
     })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+/* ══════════════════════════════════════════
+   PAYMENTS
+══════════════════════════════════════════ */
+
+// GET /payments/:customerId — payment history + outstanding balance
+router.get("/payments/:customerId", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+
+    // Verify customer belongs to this vendor
+    const check = await pool.query(
+      "SELECT 1 FROM customer_vendor_profile WHERE customer_id=$1 AND vendor_id=$2",
+      [req.params.customerId, vendorId]
+    )
+    if (check.rowCount === 0) return res.status(403).json({ message: "Unauthorized" })
+
+    const payments = await pool.query(`
+      SELECT payment_id, amount, payment_method, notes, screenshot_url,
+             recorded_by, payment_date, created_at
+      FROM payments
+      WHERE customer_id = $1 AND vendor_id = $2
+      ORDER BY payment_date DESC, created_at DESC
+    `, [req.params.customerId, vendorId])
+
+    // Outstanding balance: sum of all delivered orders - sum of all payments
+    const settings = await pool.query(
+      "SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1",
+      [vendorId]
+    )
+    const pricePerUnit = parseFloat(settings.rows[0]?.price_per_unit || 0)
+
+    const ordersTotal = await pool.query(`
+      SELECT COALESCE(SUM(quantity), 0) AS total_qty
+      FROM orders
+      WHERE customer_id=$1 AND vendor_id=$2 AND is_delivered=true
+    `, [req.params.customerId, vendorId])
+
+    const paymentsTotal = await pool.query(`
+      SELECT COALESCE(SUM(amount), 0) AS total_paid
+      FROM payments
+      WHERE customer_id=$1 AND vendor_id=$2
+    `, [req.params.customerId, vendorId])
+
+    const totalBilled  = parseFloat(ordersTotal.rows[0].total_qty) * pricePerUnit
+    const totalPaid    = parseFloat(paymentsTotal.rows[0].total_paid)
+    const outstanding  = totalBilled - totalPaid
+
+    res.json({
+      payments:    payments.rows,
+      totalBilled,
+      totalPaid,
+      outstanding,
+      pricePerUnit,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+// POST /upload-payment-screenshot — upload image, return URL
+router.post("/upload-payment-screenshot", requireAdmin, uploadPayment.single("screenshot"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" })
+    const url = `${req.protocol}://${req.get("host")}/uploads/payments/${req.file.filename}`
+    res.json({ screenshot_url: url })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ message: err.message })
+  }
+})
+
+// POST /payments — vendor records a payment
+router.post("/payments", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { customer_id, amount, payment_method, notes, screenshot_url, payment_date } = req.body
+
+    if (!customer_id || !amount) return res.status(400).json({ message: "customer_id and amount required" })
+
+    // Verify ownership
+    const check = await pool.query(
+      "SELECT 1 FROM customer_vendor_profile WHERE customer_id=$1 AND vendor_id=$2",
+      [customer_id, vendorId]
+    )
+    if (check.rowCount === 0) return res.status(403).json({ message: "Unauthorized" })
+
+    const result = await pool.query(`
+      INSERT INTO payments (customer_id, vendor_id, amount, payment_method, notes, screenshot_url, recorded_by, payment_date)
+      VALUES ($1, $2, $3, $4, $5, $6, 'vendor', $7)
+      RETURNING payment_id, amount, payment_method, payment_date, created_at
+    `, [
+      customer_id, vendorId,
+      parseFloat(amount),
+      payment_method || "cash",
+      notes || null,
+      screenshot_url || null,
+      payment_date || new Date().toISOString().slice(0, 10),
+    ])
+
+    res.json({ message: "Payment recorded", payment: result.rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+// DELETE /payments/:paymentId — vendor removes a mistaken payment entry
+router.delete("/payments/:paymentId", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const result = await pool.query(
+      "DELETE FROM payments WHERE payment_id=$1 AND vendor_id=$2 RETURNING payment_id",
+      [req.params.paymentId, vendorId]
+    )
+    if (result.rowCount === 0) return res.status(404).json({ message: "Payment not found" })
+    res.json({ success: true })
   } catch (err) {
     console.error(err)
     res.status(500).send("Error")
