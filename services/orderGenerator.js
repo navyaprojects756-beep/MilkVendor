@@ -21,13 +21,15 @@ async function generateOrdersForVendor(vendorId) {
       )
     ON CONFLICT (customer_id, vendor_id, order_date)
     DO UPDATE SET quantity = EXCLUDED.quantity
+    WHERE orders.is_delivered = false
   `, [vendorId])
 
-  // 2. Remove orders for inactive subscriptions
+  // 2. Remove orders for inactive subscriptions (skip already-delivered)
   await pool.query(`
     DELETE FROM orders o
-    WHERE o.vendor_id  = $1
-      AND o.order_date = CURRENT_DATE + 1
+    WHERE o.vendor_id    = $1
+      AND o.order_date   = CURRENT_DATE + 1
+      AND o.is_delivered = false
       AND NOT EXISTS (
         SELECT 1 FROM subscriptions s
         WHERE s.customer_id = o.customer_id
@@ -36,11 +38,12 @@ async function generateOrdersForVendor(vendorId) {
       )
   `, [vendorId])
 
-  // 3. Remove orders for customers who are paused tomorrow
+  // 3. Remove orders for customers who are paused tomorrow (skip already-delivered)
   await pool.query(`
     DELETE FROM orders o
-    WHERE o.vendor_id  = $1
-      AND o.order_date = CURRENT_DATE + 1
+    WHERE o.vendor_id    = $1
+      AND o.order_date   = CURRENT_DATE + 1
+      AND o.is_delivered = false
       AND EXISTS (
         SELECT 1 FROM subscription_pauses sp
         WHERE sp.customer_id = o.customer_id

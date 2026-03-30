@@ -71,17 +71,21 @@ async function handleVendorBot(msg, phoneNumberId) {
   /* ── Commands ── */
 
   if (text === "hi" || text === "menu") {
-    const token = generateVendorToken(vendor.vendor_id)
-    const link  = `${process.env.APP_BASE_URL}?token=${token}&t=${Date.now()}`
+    const adminToken    = generateVendorToken(vendor.vendor_id, "admin")
+    const deliveryToken = generateVendorToken(vendor.vendor_id, "delivery")
+    const t             = Date.now()
+    const adminLink    = `${process.env.APP_BASE_URL}?token=${adminToken}&t=${t}`
+    const deliveryLink = `${process.env.APP_BASE_URL}?token=${deliveryToken}&t=${t}`
 
     await sendText(
       phoneNumberId,
       phone,
       `👋 Welcome, ${vendor.vendor_name || "Vendor"}!\n\n` +
-      `📊 *Dashboard Link:*\n${link}\n\n` +
-      `_(Link valid for 2 hours)_\n\n` +
+      `🔐 *Admin Link* (full access):\n${adminLink}\n\n` +
+      `🚚 *Delivery Boy Link* (orders only):\n${deliveryLink}\n\n` +
+      `_(Links valid for 2 hours)_\n\n` +
       `⚙️ *Commands:*\n` +
-      `• menu — get dashboard link\n` +
+      `• menu — get dashboard links\n` +
       `• generate — create tomorrow's orders\n` +
       `• status — view current settings`
     )

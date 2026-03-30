@@ -15,13 +15,33 @@ router.use((_req, res, next) => {
   next()
 })
 
-/* ─── HELPER ─── */
+/* ─── HELPERS ─── */
 function getVendorId(req) {
   try {
     const decoded = verifyVendorToken(req.query.token)
     return decoded.vendorId
   } catch {
     throw new Error("Invalid token")
+  }
+}
+
+function getDecoded(req) {
+  try {
+    return verifyVendorToken(req.query.token)
+  } catch {
+    throw new Error("Invalid token")
+  }
+}
+
+// Middleware: only tokens with role=admin (or legacy tokens without role) can proceed
+function requireAdmin(req, res, next) {
+  try {
+    const decoded = verifyVendorToken(req.query.token)
+    const role = decoded.role || "admin" // legacy tokens default to admin
+    if (role !== "admin") return res.status(403).json({ message: "Access denied. Admin link required." })
+    next()
+  } catch {
+    res.status(401).json({ message: "Invalid token" })
   }
 }
 
@@ -81,7 +101,9 @@ router.post("/upload-logo", upload.single("logo"), async (req, res) => {
 
 router.get("/orders", async (req, res) => {
   try {
-    const vendorId = getVendorId(req)
+    const decoded  = getDecoded(req)
+    const vendorId = decoded.vendorId
+    const role     = decoded.role || "admin"
 
     const result = await pool.query(`
       SELECT
@@ -119,10 +141,26 @@ router.get("/orders", async (req, res) => {
       [vendorId]
     )
 
+    // For delivery role: mask phone numbers if vendor setting says so
+    let orders = result.rows
+    if (role === "delivery") {
+      const settingsRes = await pool.query(
+        "SELECT show_phone_numbers FROM vendor_settings WHERE vendor_id = $1",
+        [vendorId]
+      )
+      const showPhone = settingsRes.rows[0]?.show_phone_numbers !== false
+      if (!showPhone) {
+        orders = orders.map((o) => ({
+          ...o,
+          phone: `••••••• ${String(o.phone).slice(-3)}`,
+        }))
+      }
+    }
+
     res.json({
       vendorName:   vendor.rows[0]?.vendor_name || "Vendor",
       totalPackets: total.rows[0].total_packets,
-      orders:       result.rows,
+      orders,
     })
   } catch (err) {
     console.error(err)
@@ -172,7 +210,7 @@ router.get("/apartments", async (req, res) => {
   }
 })
 
-router.post("/apartments", async (req, res) => {
+router.post("/apartments", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const { name, address } = req.body
@@ -187,7 +225,7 @@ router.post("/apartments", async (req, res) => {
   }
 })
 
-router.put("/apartments/:id", async (req, res) => {
+router.put("/apartments/:id", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const { name, address, is_active } = req.body
@@ -205,7 +243,26 @@ router.put("/apartments/:id", async (req, res) => {
   }
 })
 
-router.patch("/apartments/:id/toggle", async (req, res) => {
+// PATCH /apartments/:id — inline edit (same as PUT, kept for frontend PATCH calls)
+router.patch("/apartments/:id", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { name, address, is_active } = req.body
+    await pool.query(`
+      UPDATE apartments SET
+        name      = COALESCE($1, name),
+        address   = COALESCE($2, address),
+        is_active = COALESCE($3, is_active)
+      WHERE apartment_id = $4 AND vendor_id = $5
+    `, [name, address, is_active, req.params.id, vendorId])
+    res.json({ message: "Updated" })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+router.patch("/apartments/:id/toggle", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     await pool.query(`
@@ -219,7 +276,7 @@ router.patch("/apartments/:id/toggle", async (req, res) => {
   }
 })
 
-router.delete("/apartments/:id", async (req, res) => {
+router.delete("/apartments/:id", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     await pool.query(
@@ -254,7 +311,7 @@ router.get("/blocks/:apartmentId", async (req, res) => {
   }
 })
 
-router.post("/blocks", async (req, res) => {
+router.post("/blocks", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const { apartment_id, block_name } = req.body
@@ -276,7 +333,7 @@ router.post("/blocks", async (req, res) => {
   }
 })
 
-router.put("/blocks/:id", async (req, res) => {
+router.put("/blocks/:id", requireAdmin, async (req, res) => {
   try {
     const { block_name, is_active } = req.body
     await pool.query(`
@@ -292,7 +349,24 @@ router.put("/blocks/:id", async (req, res) => {
   }
 })
 
-router.patch("/blocks/:id/toggle", async (req, res) => {
+// PATCH /blocks/:id — inline edit (same as PUT, kept for frontend PATCH calls)
+router.patch("/blocks/:id", requireAdmin, async (req, res) => {
+  try {
+    const { block_name, is_active } = req.body
+    await pool.query(`
+      UPDATE apartment_blocks SET
+        block_name = COALESCE($1, block_name),
+        is_active  = COALESCE($2, is_active)
+      WHERE block_id = $3
+    `, [block_name, is_active, req.params.id])
+    res.json({ message: "Updated" })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+router.patch("/blocks/:id/toggle", requireAdmin, async (req, res) => {
   try {
     await pool.query(
       "UPDATE apartment_blocks SET is_active = NOT is_active WHERE block_id = $1",
@@ -305,7 +379,7 @@ router.patch("/blocks/:id/toggle", async (req, res) => {
   }
 })
 
-router.delete("/blocks/:id", async (req, res) => {
+router.delete("/blocks/:id", requireAdmin, async (req, res) => {
   try {
     await pool.query(
       "DELETE FROM apartment_blocks WHERE block_id = $1",
@@ -352,7 +426,7 @@ router.get("/profile", async (req, res) => {
   }
 })
 
-router.put("/profile", async (req, res) => {
+router.put("/profile", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const {
@@ -422,7 +496,7 @@ router.get("/settings", async (req, res) => {
   }
 })
 
-router.post("/settings", async (req, res) => {
+router.post("/settings", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const {
@@ -538,7 +612,7 @@ router.get("/order-window/:vendorId", async (req, res) => {
    GENERATE TODAY'S ORDERS (manual trigger)
 ══════════════════════════════════════════ */
 
-router.post("/generate-orders", async (req, res) => {
+router.post("/generate-orders", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     await generateOrdersForVendor(vendorId)
@@ -553,7 +627,7 @@ router.post("/generate-orders", async (req, res) => {
    CUSTOMERS
 ══════════════════════════════════════════ */
 
-router.get("/customers", async (req, res) => {
+router.get("/customers", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const data = await pool.query(`
@@ -592,7 +666,7 @@ router.get("/customers", async (req, res) => {
 })
 
 /* ── PDF download (binary) — used by dashboard download & WhatsApp bot ── */
-router.get("/customers/:id/invoice/pdf", async (req, res) => {
+router.get("/customers/:id/invoice/pdf", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const { from, to } = req.query
@@ -644,7 +718,7 @@ router.get("/customers/:id/invoice/pdf", async (req, res) => {
 })
 
 /* ── JSON data (used by dialog preview) ── */
-router.get("/customers/:id/invoice", async (req, res) => {
+router.get("/customers/:id/invoice", requireAdmin, async (req, res) => {
   try {
     const vendorId  = getVendorId(req)
     const { from, to } = req.query
@@ -706,7 +780,7 @@ router.get("/customers/:id/invoice", async (req, res) => {
 /* ─── PAUSES ─── */
 
 // GET /pauses — all active/upcoming pauses for this vendor
-router.get("/pauses", async (req, res) => {
+router.get("/pauses", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const r = await pool.query(`
@@ -739,7 +813,7 @@ router.get("/pauses", async (req, res) => {
 })
 
 // DELETE /pauses/:pauseId — vendor resumes a customer early
-router.delete("/pauses/:pauseId", async (req, res) => {
+router.delete("/pauses/:pauseId", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const result = await pool.query(
