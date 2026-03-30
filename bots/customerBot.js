@@ -42,6 +42,25 @@ async function sendList(pid, phone, body, rows, btnLabel = "Select") {
   })
 }
 
+// Up to 3 quick-reply buttons
+async function sendButtons(pid, phone, body, buttons) {
+  await sendWhatsApp(pid, {
+    messaging_product: "whatsapp",
+    to: phone,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: body },
+      action: {
+        buttons: buttons.map((b) => ({
+          type: "reply",
+          reply: { id: b.id, title: b.title }
+        }))
+      }
+    }
+  })
+}
+
 /* ─── HELPERS ──────────────────────────────────────────── */
 
 function nav(rows) {
@@ -320,21 +339,6 @@ async function downloadWhatsAppMedia(mediaId) {
   }
 }
 
-async function notifyVendorPayment(pid, vendor, customerPhone, amount, periodLabel, screenshotUrl) {
-  try {
-    const msg =
-      `💳 *Payment Reported by Customer!*\n\n` +
-      `📱 Customer: +${customerPhone}\n` +
-      `💰 Amount: ₹${Number(amount).toFixed(2)}\n` +
-      `${periodLabel ? `📅 Period: ${periodLabel}\n` : ""}` +
-      `📆 Date: ${new Date().toLocaleDateString("en-IN")}\n\n` +
-      `${screenshotUrl ? "📸 Screenshot attached.\n\n" : ""}` +
-      `Check your dashboard for details.`
-    await sendText(pid, vendor.phone, msg)
-  } catch (err) {
-    console.error("Vendor payment notification error:", err.message)
-  }
-}
 
 /* ─── MENU SENDERS ─────────────────────────────────────── */
 
@@ -531,7 +535,7 @@ async function handleCustomerBot(msg, pid) {
 
   let input = null
   if (msg.type === "text")        input = msg.text?.body?.trim()
-  if (msg.type === "interactive") input = msg.interactive?.list_reply?.id
+  if (msg.type === "interactive") input = msg.interactive?.list_reply?.id || msg.interactive?.button_reply?.id
   // Allow null input only in payment_screenshot state (customer may send an image)
   if (!input && state?.state !== "payment_screenshot") return
 
@@ -990,10 +994,9 @@ async function handleCustomerBot(msg, pid) {
 
     const { totalAmount, periodLabel } = state.temp_data || {}
     await setState(phone, "payment_screenshot", vId, { totalAmount, periodLabel })
-    await sendText(pid, phone,
-      `📸 *Payment Screenshot*\n\n` +
-      `Send a screenshot of your payment for our records.\n\n` +
-      `Don't have one? Just type *skip*.`
+    await sendButtons(pid, phone,
+      `📸 *Payment Screenshot*\n\nSend a screenshot of your payment for our records, or tap Skip.`,
+      [{ id: "skip_screenshot", title: "⏭ Skip" }]
     )
     return
   }
@@ -1004,10 +1007,15 @@ async function handleCustomerBot(msg, pid) {
     const { totalAmount, periodLabel } = state.temp_data || {}
     let screenshotUrl = null
 
+    const isSkip = input === "skip_screenshot" || inputLower === "skip"
+
     if (msg.type === "image" && msg.image?.id) {
       screenshotUrl = await downloadWhatsAppMedia(msg.image.id)
-    } else if (input && inputLower !== "skip") {
-      await sendText(pid, phone, "📎 Please send a screenshot image, or type *skip* to continue.")
+    } else if (!isSkip) {
+      await sendButtons(pid, phone,
+        "📎 Please send a screenshot image, or tap Skip to continue without one.",
+        [{ id: "skip_screenshot", title: "⏭ Skip" }]
+      )
       return
     }
 
@@ -1017,9 +1025,6 @@ async function handleCustomerBot(msg, pid) {
         (customer_id, vendor_id, amount, payment_method, screenshot_url, recorded_by, payment_date)
       VALUES ($1, $2, $3, 'other', $4, 'customer', CURRENT_DATE)
     `, [cId, vId, totalAmount || 0, screenshotUrl])
-
-    // Notify vendor
-    await notifyVendorPayment(pid, vendor, customer.phone, totalAmount, periodLabel, screenshotUrl)
 
     await sendText(pid, phone,
       `✅ *Payment Recorded!*\n\n` +
