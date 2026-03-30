@@ -336,11 +336,16 @@ router.get("/profile", async (req, res) => {
       [vendorId]
     )
     const vendor = await pool.query(
-      "SELECT vendor_name, phone FROM vendors WHERE vendor_id = $1",
+      "SELECT vendor_name, phone, whatsapp_api_number FROM vendors WHERE vendor_id = $1",
       [vendorId]
     )
 
-    res.json({ ...profile.rows[0], vendor_name: vendor.rows[0]?.vendor_name, phone: vendor.rows[0]?.phone })
+    res.json({
+      ...profile.rows[0],
+      vendor_name: vendor.rows[0]?.vendor_name,
+      phone: vendor.rows[0]?.phone,
+      whatsapp_api_number: vendor.rows[0]?.whatsapp_api_number,
+    })
   } catch (err) {
     console.error(err)
     res.status(500).send("Error")
