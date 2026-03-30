@@ -360,7 +360,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       { id: "view",         title: "📋 My Subscription",  description: "View delivery details"         },
       { id: "resume_pause", title: "▶️ Resume Now",        description: "End pause & restart delivery"  },
       { id: "profile",      title: "📍 Update Address",    description: "Change delivery location"      },
-      { id: "get_invoice",  title: "🧾 Get Bill / Pay",    description: "View bill & mark as paid"      },
+      { id: "get_invoice",  title: "🧾 Get Bill",    description: "Download your bill"      },
     ]
   } else if (sub.status === "active") {
     header = `🥛 *${name}*\n\nHow can we help you today?`
@@ -369,7 +369,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       { id: "change",      title: "✏️ Change Quantity",   description: "Update daily packets"        },
       { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"    },
       { id: "pause",       title: "⏸ Pause Delivery",     description: "Skip delivery for some days" },
-      { id: "get_invoice", title: "🧾 Get Bill / Pay",    description: "View bill & mark as paid"    },
+      { id: "get_invoice", title: "🧾 Get Bill",    description: "Download your bill"    },
     ]
   } else {
     header = `🥛 *${name}*\n\nHow can we help you today?`
@@ -377,7 +377,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null) {
       { id: "resume",      title: "▶️ Resume Delivery",   description: `Continue with ${sub.quantity} packet/day` },
       { id: "change",      title: "✏️ Change & Resume",   description: "Pick new quantity and restart"            },
       { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"                 },
-      { id: "get_invoice", title: "🧾 Get Bill / Pay",    description: "View bill & mark as paid"                 },
+      { id: "get_invoice", title: "🧾 Get Bill",    description: "Download your bill"                 },
     ]
   }
 
@@ -951,7 +951,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Send PDF
+    // 1️⃣ Send PDF first
     try {
       await buildAndSendInvoice(pid, phone, cId, vId, range.from, range.to)
     } catch (err) {
@@ -961,21 +961,20 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Summary + Mark as Paid button
+    // 2️⃣ Then show summary + buttons
     const amtLine = pricePerUnit > 0
       ? `💰 Rate: ₹${pricePerUnit}/packet\n🧾 *Total: ₹${totalAmount.toFixed(2)}*`
       : `📦 Total packets: ${totalQty}`
-    await sendList(pid, phone,
+    await sendButtons(pid, phone,
       `📊 *Bill — ${entry.label}*\n\n` +
       `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
       `📦 Delivered: *${totalQty} packet${totalQty > 1 ? "s" : ""}*\n` +
       `${amtLine}\n\n` +
-      `Tap below to mark this bill as paid, or go back to the menu.`,
+      `Already paid? Tap *Mark as Paid* below and we'll record it for you.`,
       [
-        { id: "confirm_pay", title: "✅ Mark as Paid",  description: pricePerUnit > 0 ? `₹${totalAmount.toFixed(2)}` : "Record payment" },
-        { id: "menu",        title: "🏠 Main Menu",     description: "Done, go back" },
-      ],
-      "Select"
+        { id: "confirm_pay", title: "✅ Mark as Paid" },
+        { id: "menu",        title: "🏠 Main Menu"   },
+      ]
     )
     await setState(phone, "pay_confirm", vId, { totalAmount, periodLabel: entry.label })
     return
@@ -984,6 +983,7 @@ async function handleCustomerBot(msg, pid) {
   /* ── Mark as Paid confirmed → ask screenshot only ── */
 
   if (state.state === "pay_confirm") {
+    // Any input that isn't the button → reset to menu
     if (input !== "confirm_pay") {
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
