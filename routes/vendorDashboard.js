@@ -76,7 +76,7 @@ const upload = multer({
    LOGO UPLOAD
 ══════════════════════════════════════════ */
 
-router.post("/upload-logo", upload.single("logo"), async (req, res) => {
+router.post("/upload-logo", requireAdmin, upload.single("logo"), async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     if (!req.file) return res.status(400).json({ message: "No file uploaded" })
@@ -174,9 +174,11 @@ router.get("/orders", async (req, res) => {
 
 router.patch("/orders/:id/delivered", async (req, res) => {
   try {
+    const vendorId = getVendorId(req)
+
     const result = await pool.query(
-      "SELECT is_delivered FROM orders WHERE order_id = $1",
-      [req.params.id]
+      "SELECT is_delivered FROM orders WHERE order_id = $1 AND vendor_id = $2",
+      [req.params.id, vendorId]
     )
     if (result.rowCount === 0) return res.status(404).send("Order not found")
 
@@ -186,8 +188,8 @@ router.patch("/orders/:id/delivered", async (req, res) => {
       UPDATE orders
       SET is_delivered = $1,
           delivered_at = CASE WHEN $1 = true THEN NOW() ELSE NULL END
-      WHERE order_id = $2
-    `, [newStatus, req.params.id])
+      WHERE order_id = $2 AND vendor_id = $3
+    `, [newStatus, req.params.id, vendorId])
 
     res.json({ message: "Updated", is_delivered: newStatus, delivered_at: newStatus ? new Date() : null })
   } catch (err) {
@@ -339,13 +341,16 @@ router.post("/blocks", requireAdmin, async (req, res) => {
 
 router.put("/blocks/:id", requireAdmin, async (req, res) => {
   try {
+    const vendorId = getVendorId(req)
     const { block_name, is_active } = req.body
-    await pool.query(`
-      UPDATE apartment_blocks SET
-        block_name = COALESCE($1, block_name),
-        is_active  = COALESCE($2, is_active)
-      WHERE block_id = $3
-    `, [block_name, is_active, req.params.id])
+    const r = await pool.query(`
+      UPDATE apartment_blocks b SET
+        block_name = COALESCE($1, b.block_name),
+        is_active  = COALESCE($2, b.is_active)
+      FROM apartments a
+      WHERE b.block_id = $3 AND b.apartment_id = a.apartment_id AND a.vendor_id = $4
+    `, [block_name, is_active, req.params.id, vendorId])
+    if (r.rowCount === 0) return res.status(403).send("Unauthorized")
     res.json({ message: "Updated" })
   } catch (err) {
     console.error(err)
@@ -356,13 +361,16 @@ router.put("/blocks/:id", requireAdmin, async (req, res) => {
 // PATCH /blocks/:id — inline edit (same as PUT, kept for frontend PATCH calls)
 router.patch("/blocks/:id", requireAdmin, async (req, res) => {
   try {
+    const vendorId = getVendorId(req)
     const { block_name, is_active } = req.body
-    await pool.query(`
-      UPDATE apartment_blocks SET
-        block_name = COALESCE($1, block_name),
-        is_active  = COALESCE($2, is_active)
-      WHERE block_id = $3
-    `, [block_name, is_active, req.params.id])
+    const r = await pool.query(`
+      UPDATE apartment_blocks b SET
+        block_name = COALESCE($1, b.block_name),
+        is_active  = COALESCE($2, b.is_active)
+      FROM apartments a
+      WHERE b.block_id = $3 AND b.apartment_id = a.apartment_id AND a.vendor_id = $4
+    `, [block_name, is_active, req.params.id, vendorId])
+    if (r.rowCount === 0) return res.status(403).send("Unauthorized")
     res.json({ message: "Updated" })
   } catch (err) {
     console.error(err)
@@ -372,10 +380,13 @@ router.patch("/blocks/:id", requireAdmin, async (req, res) => {
 
 router.patch("/blocks/:id/toggle", requireAdmin, async (req, res) => {
   try {
-    await pool.query(
-      "UPDATE apartment_blocks SET is_active = NOT is_active WHERE block_id = $1",
-      [req.params.id]
-    )
+    const vendorId = getVendorId(req)
+    const r = await pool.query(`
+      UPDATE apartment_blocks b SET is_active = NOT b.is_active
+      FROM apartments a
+      WHERE b.block_id = $1 AND b.apartment_id = a.apartment_id AND a.vendor_id = $2
+    `, [req.params.id, vendorId])
+    if (r.rowCount === 0) return res.status(403).send("Unauthorized")
     res.json({ message: "Toggled" })
   } catch (err) {
     console.error(err)
@@ -385,10 +396,13 @@ router.patch("/blocks/:id/toggle", requireAdmin, async (req, res) => {
 
 router.delete("/blocks/:id", requireAdmin, async (req, res) => {
   try {
-    await pool.query(
-      "DELETE FROM apartment_blocks WHERE block_id = $1",
-      [req.params.id]
-    )
+    const vendorId = getVendorId(req)
+    const r = await pool.query(`
+      DELETE FROM apartment_blocks b
+      USING apartments a
+      WHERE b.block_id = $1 AND b.apartment_id = a.apartment_id AND a.vendor_id = $2
+    `, [req.params.id, vendorId])
+    if (r.rowCount === 0) return res.status(403).send("Unauthorized")
     res.json({ message: "Deleted" })
   } catch (err) {
     console.error(err)
