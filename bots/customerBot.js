@@ -650,16 +650,16 @@ async function handleCustomerBot(msg, pid) {
 
     // Get invoice
     if (input === "get_invoice") {
-      await sendList(pid, phone,
-        "🧾 *Get Bill*\n\nSelect the period for your bill:",
+      const now       = new Date()
+      const thisMonth = now.toLocaleString("en-IN", { month: "long", year: "numeric" })
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+                          .toLocaleString("en-IN", { month: "long", year: "numeric" })
+      await sendButtons(pid, phone,
+        `🧾 *Get Bill*\n\nWhich month's bill do you need?\n\n📅 This Month: ${thisMonth}\n📅 Last Month: ${lastMonth}`,
         [
-          { id: "inv_this_month", title: "This Month",   description: new Date().toLocaleString("en-IN", { month: "long", year: "numeric" }) },
-          { id: "inv_last_month", title: "Last Month",   description: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" }) },
-          { id: "inv_last_7",     title: "Last 7 Days",  description: "Past week's deliveries"  },
-          { id: "inv_last_30",    title: "Last 30 Days", description: "Past month's deliveries" },
-          { id: "menu",           title: "🏠 Main Menu",  description: ""                        },
-        ],
-        "Select"
+          { id: "inv_this_month", title: "This Month" },
+          { id: "inv_last_month", title: "Last Month"  },
+        ]
       )
       await setState(phone, "invoice_period", vId)
       return
@@ -908,10 +908,8 @@ async function handleCustomerBot(msg, pid) {
 
   if (state.state === "invoice_period") {
     const periodMap = {
-      inv_this_month: { key: "this_month", label: "This Month"   },
-      inv_last_month: { key: "last_month", label: "Last Month"   },
-      inv_last_7:     { key: "last_7",     label: "Last 7 Days"  },
-      inv_last_30:    { key: "last_30",    label: "Last 30 Days" },
+      inv_this_month: { key: "this_month", label: "This Month" },
+      inv_last_month: { key: "last_month", label: "Last Month" },
     }
     const entry = periodMap[input]
     if (!entry) {
