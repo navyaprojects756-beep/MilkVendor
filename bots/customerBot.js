@@ -923,24 +923,29 @@ async function handleCustomerBot(msg, pid) {
     const range = getInvoiceDateRange(entry.key)
     await sendText(pid, phone, `⏳ Generating your bill, please wait…`)
 
-    // Calculate delivered total
-    const [ordersR, settingsR] = await Promise.all([
+    // Get delivered (all) and unpaid separately
+    const [allR, unpaidR, settingsR] = await Promise.all([
       pool.query(
-        `SELECT COALESCE(SUM(quantity), 0) AS total_qty
-         FROM orders
-         WHERE customer_id=$1 AND vendor_id=$2
-           AND order_date>=$3 AND order_date<=$4
-           AND is_delivered=true`,
+        `SELECT COALESCE(SUM(quantity),0) AS qty FROM orders
+         WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4 AND is_delivered=true`,
+        [cId, vId, range.from, range.to]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(quantity),0) AS qty FROM orders
+         WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4
+           AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'`,
         [cId, vId, range.from, range.to]
       ),
       pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vId]),
     ])
 
-    const totalQty     = parseInt(ordersR.rows[0].total_qty)
-    const pricePerUnit = parseFloat(settingsR.rows[0]?.price_per_unit || 0)
-    const totalAmount  = totalQty * pricePerUnit
+    const totalDelivered = parseInt(allR.rows[0].qty)
+    const unpaidQty      = parseInt(unpaidR.rows[0].qty)
+    const pricePerUnit   = parseFloat(settingsR.rows[0]?.price_per_unit || 0)
+    const unpaidAmount   = unpaidQty * pricePerUnit
+    const paidQty        = totalDelivered - unpaidQty
 
-    if (totalQty === 0) {
+    if (totalDelivered === 0) {
       await sendText(pid, phone, `📭 No delivered orders found for this period.\n\nIf you think this is wrong, please contact your vendor.`)
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
@@ -949,7 +954,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // 1️⃣ Send PDF first
+    // Send PDF (shows all delivered)
     try {
       await buildAndSendInvoice(pid, phone, cId, vId, range.from, range.to)
     } catch (err) {
@@ -959,29 +964,53 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // 2️⃣ Then show summary + buttons
-    const amtLine = pricePerUnit > 0
-      ? `💰 Rate: ₹${pricePerUnit}/packet\n🧾 *Total: ₹${totalAmount.toFixed(2)}*`
-      : `📦 Total packets: ${totalQty}`
+    // All already paid
+    if (unpaidQty === 0) {
+      await sendText(pid, phone,
+        `✅ *Bill — ${entry.label}*\n\n` +
+        `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
+        `📦 Delivered: ${totalDelivered} packet${totalDelivered > 1 ? "s" : ""}\n` +
+        `${pricePerUnit > 0 ? `🧾 Total: ₹${(totalDelivered * pricePerUnit).toFixed(2)}\n` : ""}` +
+        `\n🎉 *This bill is fully paid!* Thank you.`
+      )
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause)
+      return
+    }
+
+    // Some or all unpaid — show split summary
+    const paidLine   = paidQty > 0 ? `✅ Paid: ${paidQty} packet${paidQty > 1 ? "s" : ""}\n` : ""
+    const amtLine    = pricePerUnit > 0
+      ? `💰 Rate: ₹${pricePerUnit}/packet\n🧾 *Amount Due: ₹${unpaidAmount.toFixed(2)}*`
+      : `📦 Unpaid packets: ${unpaidQty}`
+
     await sendButtons(pid, phone,
       `📊 *Bill — ${entry.label}*\n\n` +
       `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
-      `📦 Delivered: *${totalQty} packet${totalQty > 1 ? "s" : ""}*\n` +
+      `📦 Total delivered: ${totalDelivered} packets\n` +
+      `${paidLine}` +
+      `⏳ Pending: ${unpaidQty} packet${unpaidQty > 1 ? "s" : ""}\n` +
       `${amtLine}\n\n` +
-      `Already paid? Tap *Mark as Paid* below and we'll record it for you.`,
+      `Already paid? Tap *Mark as Paid* and we'll record it.`,
       [
         { id: "confirm_pay", title: "✅ Mark as Paid" },
         { id: "menu",        title: "🏠 Main Menu"   },
       ]
     )
-    await setState(phone, "pay_confirm", vId, { totalAmount, periodLabel: entry.label })
+    await setState(phone, "pay_confirm", vId, {
+      totalAmount:  unpaidAmount,
+      periodLabel:  entry.label,
+      periodFrom:   range.from,
+      periodTo:     range.to,
+    })
     return
   }
 
   /* ── Mark as Paid confirmed → ask screenshot only ── */
 
   if (state.state === "pay_confirm") {
-    // Any input that isn't the button → reset to menu
     if (input !== "confirm_pay") {
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
@@ -990,8 +1019,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    const { totalAmount, periodLabel } = state.temp_data || {}
-    await setState(phone, "payment_screenshot", vId, { totalAmount, periodLabel })
+    await setState(phone, "payment_screenshot", vId, state.temp_data)
     await sendButtons(pid, phone,
       `📸 *Payment Screenshot*\n\nSend a screenshot of your payment for our records, or tap Skip.`,
       [{ id: "skip_screenshot", title: "⏭ Skip" }]
@@ -1002,7 +1030,7 @@ async function handleCustomerBot(msg, pid) {
   /* ── Payment screenshot (image or "skip") ── */
 
   if (state.state === "payment_screenshot") {
-    const { totalAmount, periodLabel } = state.temp_data || {}
+    const { totalAmount, periodLabel, periodFrom, periodTo } = state.temp_data || {}
     let screenshotUrl = null
 
     const isSkip = input === "skip_screenshot" || inputLower === "skip"
@@ -1017,12 +1045,23 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Record payment (amount = bill total, method stored as 'other' — no method asked)
+    // Record payment with period
     await pool.query(`
       INSERT INTO payments
-        (customer_id, vendor_id, amount, payment_method, screenshot_url, recorded_by, payment_date)
-      VALUES ($1, $2, $3, 'other', $4, 'customer', CURRENT_DATE)
-    `, [cId, vId, totalAmount || 0, screenshotUrl])
+        (customer_id, vendor_id, amount, payment_method, screenshot_url,
+         recorded_by, payment_date, period_from, period_to)
+      VALUES ($1,$2,$3,'other',$4,'customer',CURRENT_DATE,$5,$6)
+    `, [cId, vId, totalAmount || 0, screenshotUrl, periodFrom || null, periodTo || null])
+
+    // Mark covered orders as paid
+    if (periodFrom && periodTo) {
+      await pool.query(`
+        UPDATE orders SET payment_status='paid'
+        WHERE customer_id=$1 AND vendor_id=$2
+          AND order_date>=$3 AND order_date<=$4
+          AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'
+      `, [cId, vId, periodFrom, periodTo])
+    }
 
     await sendText(pid, phone,
       `✅ *Payment Recorded!*\n\n` +

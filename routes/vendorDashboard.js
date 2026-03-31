@@ -789,7 +789,8 @@ router.get("/customers/:id/invoice", requireAdmin, async (req, res) => {
     if (customer.rowCount === 0) return res.status(404).send("Customer not found")
 
     const orders = await pool.query(`
-      SELECT order_date, quantity, is_delivered, delivered_at
+      SELECT order_date, quantity, is_delivered, delivered_at,
+             COALESCE(payment_status, 'unpaid') AS payment_status
       FROM orders
       WHERE customer_id = $1 AND vendor_id = $2
         AND order_date >= $3 AND order_date <= $4
@@ -821,56 +822,43 @@ router.get("/customers/:id/invoice", requireAdmin, async (req, res) => {
    PAYMENTS
 ══════════════════════════════════════════ */
 
-// GET /payments/:customerId — payment history + outstanding balance
+// GET /payments/:customerId — payment history + outstanding (unpaid delivered orders)
 router.get("/payments/:customerId", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
 
-    // Verify customer belongs to this vendor
     const check = await pool.query(
       "SELECT 1 FROM customer_vendor_profile WHERE customer_id=$1 AND vendor_id=$2",
       [req.params.customerId, vendorId]
     )
     if (check.rowCount === 0) return res.status(403).json({ message: "Unauthorized" })
 
-    const payments = await pool.query(`
-      SELECT payment_id, amount, payment_method, notes, screenshot_url,
-             recorded_by, payment_date, created_at
-      FROM payments
-      WHERE customer_id = $1 AND vendor_id = $2
-      ORDER BY payment_date DESC, created_at DESC
-    `, [req.params.customerId, vendorId])
+    const [payments, settings, totalR, unpaidR] = await Promise.all([
+      pool.query(`
+        SELECT payment_id, amount, payment_method, notes, screenshot_url,
+               recorded_by, payment_date, created_at,
+               period_from, period_to, is_verified, is_revoked
+        FROM payments
+        WHERE customer_id=$1 AND vendor_id=$2
+        ORDER BY payment_date DESC, created_at DESC
+      `, [req.params.customerId, vendorId]),
+      pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vendorId]),
+      pool.query(
+        "SELECT COALESCE(SUM(quantity),0) AS qty FROM orders WHERE customer_id=$1 AND vendor_id=$2 AND is_delivered=true",
+        [req.params.customerId, vendorId]
+      ),
+      pool.query(
+        "SELECT COALESCE(SUM(quantity),0) AS qty FROM orders WHERE customer_id=$1 AND vendor_id=$2 AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'",
+        [req.params.customerId, vendorId]
+      ),
+    ])
 
-    // Outstanding balance: sum of all delivered orders - sum of all payments
-    const settings = await pool.query(
-      "SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1",
-      [vendorId]
-    )
     const pricePerUnit = parseFloat(settings.rows[0]?.price_per_unit || 0)
+    const totalBilled  = parseFloat(totalR.rows[0].qty) * pricePerUnit
+    const outstanding  = parseFloat(unpaidR.rows[0].qty) * pricePerUnit
+    const totalPaid    = totalBilled - outstanding
 
-    const ordersTotal = await pool.query(`
-      SELECT COALESCE(SUM(quantity), 0) AS total_qty
-      FROM orders
-      WHERE customer_id=$1 AND vendor_id=$2 AND is_delivered=true
-    `, [req.params.customerId, vendorId])
-
-    const paymentsTotal = await pool.query(`
-      SELECT COALESCE(SUM(amount), 0) AS total_paid
-      FROM payments
-      WHERE customer_id=$1 AND vendor_id=$2
-    `, [req.params.customerId, vendorId])
-
-    const totalBilled  = parseFloat(ordersTotal.rows[0].total_qty) * pricePerUnit
-    const totalPaid    = parseFloat(paymentsTotal.rows[0].total_paid)
-    const outstanding  = totalBilled - totalPaid
-
-    res.json({
-      payments:    payments.rows,
-      totalBilled,
-      totalPaid,
-      outstanding,
-      pricePerUnit,
-    })
+    res.json({ payments: payments.rows, totalBilled, totalPaid, outstanding, pricePerUnit })
   } catch (err) {
     console.error(err)
     res.status(500).send("Error")
@@ -889,15 +877,14 @@ router.post("/upload-payment-screenshot", requireAdmin, uploadPayment.single("sc
   }
 })
 
-// POST /payments — vendor records a payment
+// POST /payments — vendor records a payment and marks orders as paid for the period
 router.post("/payments", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
-    const { customer_id, amount, payment_method, notes, screenshot_url, payment_date } = req.body
+    const { customer_id, amount, payment_method, notes, screenshot_url, payment_date, period_from, period_to } = req.body
 
     if (!customer_id || !amount) return res.status(400).json({ message: "customer_id and amount required" })
 
-    // Verify ownership
     const check = await pool.query(
       "SELECT 1 FROM customer_vendor_profile WHERE customer_id=$1 AND vendor_id=$2",
       [customer_id, vendorId]
@@ -905,8 +892,9 @@ router.post("/payments", requireAdmin, async (req, res) => {
     if (check.rowCount === 0) return res.status(403).json({ message: "Unauthorized" })
 
     const result = await pool.query(`
-      INSERT INTO payments (customer_id, vendor_id, amount, payment_method, notes, screenshot_url, recorded_by, payment_date)
-      VALUES ($1, $2, $3, $4, $5, $6, 'vendor', $7)
+      INSERT INTO payments (customer_id, vendor_id, amount, payment_method, notes, screenshot_url,
+                            recorded_by, payment_date, period_from, period_to, is_verified)
+      VALUES ($1,$2,$3,$4,$5,$6,'vendor',$7,$8,$9,true)
       RETURNING payment_id, amount, payment_method, payment_date, created_at
     `, [
       customer_id, vendorId,
@@ -915,7 +903,19 @@ router.post("/payments", requireAdmin, async (req, res) => {
       notes || null,
       screenshot_url || null,
       payment_date || new Date().toISOString().slice(0, 10),
+      period_from || null,
+      period_to   || null,
     ])
+
+    // Mark covered orders as paid
+    if (period_from && period_to) {
+      await pool.query(`
+        UPDATE orders SET payment_status='paid'
+        WHERE customer_id=$1 AND vendor_id=$2
+          AND order_date>=$3 AND order_date<=$4
+          AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'
+      `, [customer_id, vendorId, period_from, period_to])
+    }
 
     res.json({ message: "Payment recorded", payment: result.rows[0] })
   } catch (err) {
@@ -924,15 +924,78 @@ router.post("/payments", requireAdmin, async (req, res) => {
   }
 })
 
-// DELETE /payments/:paymentId — vendor removes a mistaken payment entry
-router.delete("/payments/:paymentId", requireAdmin, async (req, res) => {
+// PATCH /payments/:paymentId/verify — vendor confirms the payment is genuine
+router.patch("/payments/:paymentId/verify", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const result = await pool.query(
-      "DELETE FROM payments WHERE payment_id=$1 AND vendor_id=$2 RETURNING payment_id",
+      "UPDATE payments SET is_verified=true, is_revoked=false WHERE payment_id=$1 AND vendor_id=$2 RETURNING payment_id",
       [req.params.paymentId, vendorId]
     )
     if (result.rowCount === 0) return res.status(404).json({ message: "Payment not found" })
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+// PATCH /payments/:paymentId/revoke — vendor revokes: marks payment revoked + orders back to unpaid
+router.patch("/payments/:paymentId/revoke", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const payR = await pool.query(
+      "SELECT customer_id, period_from, period_to FROM payments WHERE payment_id=$1 AND vendor_id=$2",
+      [req.params.paymentId, vendorId]
+    )
+    if (payR.rowCount === 0) return res.status(404).json({ message: "Payment not found" })
+
+    const { customer_id, period_from, period_to } = payR.rows[0]
+
+    await pool.query(
+      "UPDATE payments SET is_revoked=true, is_verified=false WHERE payment_id=$1",
+      [req.params.paymentId]
+    )
+
+    // Flip orders back to unpaid for the period this payment covered
+    if (period_from && period_to) {
+      await pool.query(`
+        UPDATE orders SET payment_status='unpaid'
+        WHERE customer_id=$1 AND vendor_id=$2
+          AND order_date>=$3 AND order_date<=$4
+          AND is_delivered=true AND payment_status='paid'
+      `, [customer_id, vendorId, period_from, period_to])
+    }
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+// DELETE /payments/:paymentId — remove payment entry (also revokes orders if period set)
+router.delete("/payments/:paymentId", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const payR = await pool.query(
+      "SELECT customer_id, period_from, period_to FROM payments WHERE payment_id=$1 AND vendor_id=$2",
+      [req.params.paymentId, vendorId]
+    )
+    if (payR.rowCount === 0) return res.status(404).json({ message: "Payment not found" })
+
+    const { customer_id, period_from, period_to } = payR.rows[0]
+    await pool.query("DELETE FROM payments WHERE payment_id=$1", [req.params.paymentId])
+
+    if (period_from && period_to) {
+      await pool.query(`
+        UPDATE orders SET payment_status='unpaid'
+        WHERE customer_id=$1 AND vendor_id=$2
+          AND order_date>=$3 AND order_date<=$4
+          AND is_delivered=true AND payment_status='paid'
+      `, [customer_id, vendorId, period_from, period_to])
+    }
+
     res.json({ success: true })
   } catch (err) {
     console.error(err)
