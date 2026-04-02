@@ -23,6 +23,9 @@ const vendorDashboard = require("./routes/vendorDashboard")
 
 /* ---------------- MIDDLEWARE ---------------- */
 
+// WhatsApp Flow data exchange needs raw body for decryption
+app.use("/vendor/whatsapp-flow-data", express.raw({ type: "*/*" }))
+
 app.use(express.json({ limit: "10mb" }))
 app.use(express.static("public", {
   etag: false,

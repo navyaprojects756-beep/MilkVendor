@@ -1371,4 +1371,127 @@ router.get("/messages/thread/:phone", requireAdmin, async (req, res) => {
   }
 })
 
+/* ══════════════════════════════════════════
+   WHATSAPP FLOW DATA EXCHANGE ENDPOINT
+══════════════════════════════════════════ */
+
+const crypto = require("crypto")
+const fs_    = require("fs")
+const path_  = require("path")
+
+// Load private key once at startup
+let FLOW_PRIVATE_KEY = null
+try {
+  FLOW_PRIVATE_KEY = fs_.readFileSync(path_.join(__dirname, "../private.pem"), "utf8")
+} catch {
+  console.warn("⚠️  private.pem not found — WhatsApp Flow decryption will not work")
+}
+
+function decryptFlowRequest(body) {
+  const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body
+
+  // 1. Decrypt the AES key using our RSA private key
+  const decryptedAesKey = crypto.privateDecrypt(
+    { key: FLOW_PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" },
+    Buffer.from(encrypted_aes_key, "base64")
+  )
+
+  // 2. Decrypt the flow data using AES-128-GCM
+  const iv        = Buffer.from(initial_vector, "base64")
+  const encrypted = Buffer.from(encrypted_flow_data, "base64")
+  const TAG_LENGTH = 16
+  const encData   = encrypted.subarray(0, -TAG_LENGTH)
+  const authTag   = encrypted.subarray(-TAG_LENGTH)
+
+  const decipher  = crypto.createDecipheriv("aes-128-gcm", decryptedAesKey, iv)
+  decipher.setAuthTag(authTag)
+
+  const decrypted = Buffer.concat([decipher.update(encData), decipher.final()])
+  return { decryptedAesKey, iv, payload: JSON.parse(decrypted.toString("utf8")) }
+}
+
+function encryptFlowResponse(responseData, aesKey, iv) {
+  // Flip the IV for response
+  const flippedIv = Buffer.from(iv.map((b) => ~b & 0xff))
+  const cipher    = crypto.createCipheriv("aes-128-gcm", aesKey, flippedIv)
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(responseData), "utf8"), cipher.final()])
+  const tag       = cipher.getAuthTag()
+  return Buffer.concat([encrypted, tag]).toString("base64")
+}
+
+router.post("/whatsapp-flow-data", async (req, res) => {
+  try {
+    if (!FLOW_PRIVATE_KEY) {
+      return res.status(500).send("Private key not configured")
+    }
+
+    let rawBody = req.body
+    if (Buffer.isBuffer(rawBody)) rawBody = rawBody.toString("utf8")
+    const parsed = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody
+
+    // Decrypt every request (ping is also encrypted per Meta spec)
+    const { decryptedAesKey, iv, payload } = decryptFlowRequest(parsed)
+    const { action, screen, data: flowData } = payload
+
+    let responsePayload = {}
+
+    if (action === "ping") {
+      // Health check — respond with status active
+      responsePayload = { data: { status: "active" } }
+
+    } else if (action === "INIT" || action === "data_exchange") {
+
+      if (screen === "WELCOME" || action === "INIT") {
+        const addressType = flowData?.address_type
+
+        if (addressType === "apartment") {
+          let vendorId = null
+          try { if (payload.flow_token) vendorId = parseInt(payload.flow_token) } catch {}
+
+          const aptQuery = vendorId
+            ? await pool.query("SELECT apartment_id, name FROM apartments WHERE vendor_id=$1 ORDER BY name", [vendorId])
+            : await pool.query("SELECT apartment_id, name FROM apartments ORDER BY name LIMIT 50")
+
+          responsePayload = {
+            screen: "APARTMENT_ADDRESS",
+            data: {
+              customer_name: flowData?.customer_name || "",
+              apartments: aptQuery.rows.map((a) => ({ id: String(a.apartment_id), title: a.name })),
+            },
+          }
+        } else {
+          responsePayload = {
+            screen: "HOUSE_ADDRESS",
+            data: { customer_name: flowData?.customer_name || "" },
+          }
+        }
+
+      } else if (screen === "APARTMENT_ADDRESS") {
+        const aptId = flowData?.apartment_id
+        const { rows: blockRows } = await pool.query(
+          "SELECT block_id, block_name FROM apartment_blocks WHERE apartment_id=$1 ORDER BY block_name",
+          [aptId]
+        )
+        responsePayload = {
+          screen: "APARTMENT_BLOCK",
+          data: {
+            customer_name: flowData?.customer_name || "",
+            apartment_id:  aptId,
+            blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
+          },
+        }
+      }
+    }
+
+    // Response must be a raw Base64 encoded encrypted string (NOT JSON wrapper)
+    const encrypted = encryptFlowResponse(responsePayload, decryptedAesKey, iv)
+    res.set("Content-Type", "text/plain")
+    res.send(encrypted)
+
+  } catch (err) {
+    console.error("Flow data exchange error:", err.message)
+    res.status(500).send("Internal error")
+  }
+})
+
 module.exports = router

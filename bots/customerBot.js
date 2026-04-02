@@ -29,6 +29,38 @@ async function sendText(pid, phone, text) {
   })
 }
 
+// ── Send the registration flow template to a new user ──
+// Fill in FLOW_ID after publishing the flow in Meta
+const REGISTRATION_FLOW_ID       = process.env.REGISTRATION_FLOW_ID || "YOUR_FLOW_ID"
+const REGISTRATION_TEMPLATE_NAME = "customer_registration"
+
+async function sendRegistrationFlow(pid, phone, vendorId) {
+  await sendWhatsApp(pid, {
+    messaging_product: "whatsapp",
+    to:   phone,
+    type: "template",
+    template: {
+      name:     REGISTRATION_TEMPLATE_NAME,
+      language: { code: "en" },
+      components: [
+        {
+          type: "button",
+          sub_type: "flow",
+          index: "0",
+          parameters: [
+            {
+              type:       "action",
+              action: {
+                flow_token: String(vendorId),  // passed back to endpoint so we know which vendor's apartments to show
+              }
+            }
+          ]
+        }
+      ]
+    }
+  })
+}
+
 async function sendList(pid, phone, body, rows, btnLabel = "Select") {
   await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
@@ -629,6 +661,31 @@ async function handleCustomerBot(msg, pid) {
   if (msg.type === "text")        input = msg.text?.body?.trim()
   if (msg.type === "interactive") input = msg.interactive?.list_reply?.id || msg.interactive?.button_reply?.id
 
+  // ── Handle flow form submission ──
+  const isFlowReply = msg.type === "interactive" && msg.interactive?.type === "nfm_reply"
+  if (isFlowReply) {
+    const formData = JSON.parse(msg.interactive.nfm_reply.response_json || "{}")
+    const name     = formData.customer_name || ""
+
+    // Save name to customers table
+    if (name) {
+      await pool.query("UPDATE customers SET name=$1 WHERE customer_id=$2", [name, cId])
+    }
+
+    if (formData.address_type === "apartment") {
+      await saveApartment(cId, vId, formData.apartment_id, formData.block_id, formData.flat_number)
+    } else if (formData.address_type === "house") {
+      await saveManual(cId, vId, formData.manual_address)
+    }
+
+    await sendText(pid, phone, `✅ *Registration complete!*\n\nWelcome${name ? `, ${name}` : ""}! 🎉\n\nYour address has been saved. You can now subscribe to daily deliveries.`)
+    const sub   = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
+    await setState(phone, "menu", vId)
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+    return
+  }
+
   const MEDIA_STATES = ["payment_screenshot"]
   const MEDIA_TYPES  = ["image", "document", "audio", "video"]
   const isMedia      = MEDIA_TYPES.includes(msg.type)
@@ -651,6 +708,13 @@ async function handleCustomerBot(msg, pid) {
     const name  = (profile?.business_name || "Milk Service").trim()
 
     if (!state || isReset) {
+      // ── New user with no address → send registration flow ──
+      if (!addr && !sub) {
+        await sendRegistrationFlow(pid, phone, vId)
+        await setState(phone, "awaiting_registration", vId)
+        return
+      }
+
       let welcome
       if (withProducts && sub?.status === "active") {
         const subs = await getCustomerProductSubs(cId, vId)
