@@ -731,7 +731,7 @@ router.get("/customers/:id/invoice/pdf", requireAdmin, async (req, res) => {
     const { from, to } = req.query
     if (!from || !to) return res.status(400).json({ error: "from and to are required" })
 
-    const [custR, ordersR, settingsR, profileR] = await Promise.all([
+    const [custR, ordersR, itemsR, settingsR, profileR] = await Promise.all([
       pool.query(`
         SELECT c.customer_id, c.phone,
           CASE WHEN cv.address_type='apartment'
@@ -744,9 +744,22 @@ router.get("/customers/:id/invoice/pdf", requireAdmin, async (req, res) => {
         WHERE c.customer_id=$1
       `, [req.params.id, vendorId]),
       pool.query(
-        `SELECT order_date, quantity, is_delivered FROM orders
+        `SELECT order_id, order_date, quantity, is_delivered,
+                COALESCE(payment_status,'unpaid') AS payment_status
+         FROM orders
          WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4
          ORDER BY order_date`,
+        [req.params.id, vendorId, from, to]
+      ),
+      pool.query(
+        `SELECT oi.order_id, oi.quantity, oi.price_at_order,
+                oi.delivery_charge_at_order, oi.order_type,
+                p.name AS product_name, p.unit
+         FROM order_items oi
+         JOIN orders o ON o.order_id = oi.order_id
+         JOIN products p ON p.product_id = oi.product_id
+         WHERE o.customer_id=$1 AND o.vendor_id=$2
+           AND o.order_date>=$3 AND o.order_date<=$4 AND o.is_delivered=true`,
         [req.params.id, vendorId, from, to]
       ),
       pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vendorId]),
@@ -755,11 +768,18 @@ router.get("/customers/:id/invoice/pdf", requireAdmin, async (req, res) => {
 
     if (custR.rowCount === 0) return res.status(404).json({ error: "Customer not found" })
 
+    const itemsByOrder = {}
+    for (const it of itemsR.rows) {
+      if (!itemsByOrder[it.order_id]) itemsByOrder[it.order_id] = []
+      itemsByOrder[it.order_id].push(it)
+    }
+    const ordersWithItems = ordersR.rows.map(o => ({ ...o, items: itemsByOrder[o.order_id] || [] }))
+
     const { generateInvoicePDF } = require("../services/invoicePDF")
     const pdfBuffer = await generateInvoicePDF(
       {
         customer:       custR.rows[0],
-        orders:         ordersR.rows,
+        orders:         ordersWithItems,
         price_per_unit: parseFloat(settingsR.rows[0]?.price_per_unit || 0),
         vendor:         profileR.rows[0] || {},
       },
@@ -807,27 +827,39 @@ router.get("/customers/:id/invoice", requireAdmin, async (req, res) => {
 
     if (customer.rowCount === 0) return res.status(404).send("Customer not found")
 
-    const orders = await pool.query(`
-      SELECT order_date, quantity, is_delivered, delivered_at,
-             COALESCE(payment_status, 'unpaid') AS payment_status
-      FROM orders
-      WHERE customer_id = $1 AND vendor_id = $2
-        AND order_date >= $3 AND order_date <= $4
-      ORDER BY order_date
-    `, [req.params.id, vendorId, from, to])
+    const [orders, items, settings, profile] = await Promise.all([
+      pool.query(`
+        SELECT order_id, order_date, quantity, is_delivered, delivered_at,
+               COALESCE(payment_status, 'unpaid') AS payment_status
+        FROM orders
+        WHERE customer_id = $1 AND vendor_id = $2
+          AND order_date >= $3 AND order_date <= $4
+        ORDER BY order_date
+      `, [req.params.id, vendorId, from, to]),
+      pool.query(`
+        SELECT oi.order_id, oi.quantity, oi.price_at_order,
+               oi.delivery_charge_at_order, oi.order_type,
+               p.name AS product_name, p.unit
+        FROM order_items oi
+        JOIN orders o ON o.order_id = oi.order_id
+        JOIN products p ON p.product_id = oi.product_id
+        WHERE o.customer_id = $1 AND o.vendor_id = $2
+          AND o.order_date >= $3 AND o.order_date <= $4
+      `, [req.params.id, vendorId, from, to]),
+      pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id = $1", [vendorId]),
+      pool.query("SELECT business_name, logo_url, whatsapp_number, area, city FROM vendor_profile WHERE vendor_id = $1", [vendorId]),
+    ])
 
-    const settings = await pool.query(
-      "SELECT price_per_unit FROM vendor_settings WHERE vendor_id = $1",
-      [vendorId]
-    )
-    const profile = await pool.query(
-      "SELECT business_name, logo_url, whatsapp_number, area, city FROM vendor_profile WHERE vendor_id = $1",
-      [vendorId]
-    )
+    const itemsByOrder = {}
+    for (const it of items.rows) {
+      if (!itemsByOrder[it.order_id]) itemsByOrder[it.order_id] = []
+      itemsByOrder[it.order_id].push(it)
+    }
+    const ordersWithItems = orders.rows.map(o => ({ ...o, items: itemsByOrder[o.order_id] || [] }))
 
     res.json({
       customer:       customer.rows[0],
-      orders:         orders.rows,
+      orders:         ordersWithItems,
       price_per_unit: parseFloat(settings.rows[0]?.price_per_unit || 0),
       vendor:         profile.rows[0] || {},
     })
@@ -1379,12 +1411,17 @@ const crypto = require("crypto")
 const fs_    = require("fs")
 const path_  = require("path")
 
-// Load private key once at startup
+// Load private key — env variable takes priority (Railway), fallback to file (local dev)
 let FLOW_PRIVATE_KEY = null
-try {
-  FLOW_PRIVATE_KEY = fs_.readFileSync(path_.join(__dirname, "../private.pem"), "utf8")
-} catch {
-  console.warn("⚠️  private.pem not found — WhatsApp Flow decryption will not work")
+if (process.env.FLOW_PRIVATE_KEY) {
+  // Railway: newlines stored as \n literal in env var
+  FLOW_PRIVATE_KEY = process.env.FLOW_PRIVATE_KEY.replace(/\\n/g, "\n")
+} else {
+  try {
+    FLOW_PRIVATE_KEY = fs_.readFileSync(path_.join(__dirname, "../private.pem"), "utf8")
+  } catch {
+    console.warn("⚠️  private.pem not found — WhatsApp Flow decryption will not work")
+  }
 }
 
 function decryptFlowRequest(body) {

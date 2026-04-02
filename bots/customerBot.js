@@ -49,9 +49,10 @@ async function sendRegistrationFlow(pid, phone, vendorId) {
           index: "0",
           parameters: [
             {
-              type:       "action",
+              type:   "action",
               action: {
-                flow_token: String(vendorId),  // passed back to endpoint so we know which vendor's apartments to show
+                flow_id:    REGISTRATION_FLOW_ID,
+                flow_token: String(vendorId),
               }
             }
           ]
@@ -302,7 +303,7 @@ function getInvoiceDateRange(period) {
 }
 
 async function buildAndSendInvoice(pid, phone, cId, vId, from, to) {
-  const [custR, ordersR, settingsR, profileR] = await Promise.all([
+  const [custR, ordersR, itemsR, settingsR, profileR] = await Promise.all([
     pool.query(`
       SELECT c.customer_id, c.phone,
         CASE WHEN cv.address_type='apartment'
@@ -315,19 +316,37 @@ async function buildAndSendInvoice(pid, phone, cId, vId, from, to) {
       WHERE c.customer_id=$1
     `, [cId, vId]),
     pool.query(
-      `SELECT order_date, quantity, is_delivered FROM orders
+      `SELECT order_id, order_date, quantity, is_delivered FROM orders
        WHERE customer_id=$1 AND vendor_id=$2
          AND order_date>=$3 AND order_date<=$4
        ORDER BY order_date`,
+      [cId, vId, from, to]
+    ),
+    pool.query(
+      `SELECT oi.order_id, oi.quantity, oi.price_at_order,
+              oi.delivery_charge_at_order, oi.order_type, p.name AS product_name, p.unit
+       FROM order_items oi
+       JOIN orders o ON o.order_id = oi.order_id
+       JOIN products p ON p.product_id = oi.product_id
+       WHERE o.customer_id=$1 AND o.vendor_id=$2
+         AND o.order_date>=$3 AND o.order_date<=$4 AND o.is_delivered=true`,
       [cId, vId, from, to]
     ),
     pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vId]),
     pool.query("SELECT business_name, whatsapp_number, area, city FROM vendor_profile WHERE vendor_id=$1", [vId]),
   ])
 
+  // Attach items to each order
+  const itemsByOrder = {}
+  for (const it of itemsR.rows) {
+    if (!itemsByOrder[it.order_id]) itemsByOrder[it.order_id] = []
+    itemsByOrder[it.order_id].push(it)
+  }
+  const ordersWithItems = ordersR.rows.map(o => ({ ...o, items: itemsByOrder[o.order_id] || [] }))
+
   const data = {
     customer:       custR.rows[0],
-    orders:         ordersR.rows,
+    orders:         ordersWithItems,
     price_per_unit: parseFloat(settingsR.rows[0]?.price_per_unit || 0),
     vendor:         profileR.rows[0] || {},
   }
@@ -751,8 +770,10 @@ async function handleCustomerBot(msg, pid) {
   if (!isOrderWindowOpen(settings)) {
     const s = settings.order_accept_start || "—"
     const e = settings.order_accept_end   || "—"
+    // Save message to inbox so vendor can see it
+    if (input) await saveInboundMessage(vId, cId, phone, "text", input, null)
     await sendText(pid, phone,
-      `⏰ *Sorry, we are not accepting messages right now.*\n\nOur order window is open from *${s}* to *${e}*.\n\nPlease message us during those hours and we'll be happy to help! 🙏`
+      `⏰ *We are not accepting messages right now.*\n\nOur order window is open from *${s}* to *${e}*.\n\nPlease message us during those hours and we'll be happy to help! 🙏`
     )
     return
   }
@@ -927,7 +948,14 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+    // Unrecognised input in menu state → save to inbox + auto-reply
+    await saveInboundMessage(vId, cId, phone, "text", input, null)
+    const vendorPhone = settings.vendor_phone || profile.whatsapp_number || ""
+    await sendText(pid, phone,
+      vendorPhone
+        ? `👋 We received your message.\n\nFor immediate help, please call:\n📞 *${vendorPhone}*`
+        : `👋 We received your message and will get back to you if needed.`
+    )
     return
   }
 
@@ -1151,27 +1179,51 @@ async function handleCustomerBot(msg, pid) {
     const range = getInvoiceDateRange(entry.key)
     await sendText(pid, phone, `⏳ Generating your bill, please wait…`)
 
-    // Get delivered (all) and unpaid separately
-    const [allR, unpaidR, settingsR] = await Promise.all([
+    // Calculate totals — use order_items if available, else fall back to quantity × price_per_unit
+    const [deliveredR, itemsTotalR, itemsUnpaidR, settingsR] = await Promise.all([
       pool.query(
-        `SELECT COALESCE(SUM(quantity),0) AS qty FROM orders
+        `SELECT COUNT(*) AS cnt FROM orders
          WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4 AND is_delivered=true`,
         [cId, vId, range.from, range.to]
       ),
       pool.query(
-        `SELECT COALESCE(SUM(quantity),0) AS qty FROM orders
-         WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4
-           AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'`,
+        `SELECT COALESCE(SUM(oi.quantity * (oi.price_at_order + COALESCE(oi.delivery_charge_at_order,0))), 0) AS total
+         FROM order_items oi
+         JOIN orders o ON o.order_id = oi.order_id
+         WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date>=$3 AND o.order_date<=$4 AND o.is_delivered=true`,
+        [cId, vId, range.from, range.to]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(oi.quantity * (oi.price_at_order + COALESCE(oi.delivery_charge_at_order,0))), 0) AS total
+         FROM order_items oi
+         JOIN orders o ON o.order_id = oi.order_id
+         WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date>=$3 AND o.order_date<=$4
+           AND o.is_delivered=true AND COALESCE(o.payment_status,'unpaid')='unpaid'`,
         [cId, vId, range.from, range.to]
       ),
       pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vId]),
     ])
 
-    const totalDelivered = parseInt(allR.rows[0].qty)
-    const unpaidQty      = parseInt(unpaidR.rows[0].qty)
+    const totalDelivered = parseInt(deliveredR.rows[0].cnt)
+    const itemsTotal     = parseFloat(itemsTotalR.rows[0].total)
+    const itemsUnpaid    = parseFloat(itemsUnpaidR.rows[0].total)
     const pricePerUnit   = parseFloat(settingsR.rows[0]?.price_per_unit || 0)
-    const unpaidAmount   = unpaidQty * pricePerUnit
-    const paidQty        = totalDelivered - unpaidQty
+
+    // Use order_items total if available, else legacy calculation
+    const hasItemsData = itemsTotal > 0
+    let totalAmount, unpaidAmount
+    if (hasItemsData) {
+      totalAmount  = itemsTotal
+      unpaidAmount = itemsUnpaid
+    } else {
+      // Legacy: need qty for calculation
+      const [allQtyR, unpaidQtyR] = await Promise.all([
+        pool.query(`SELECT COALESCE(SUM(quantity),0) AS qty FROM orders WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4 AND is_delivered=true`, [cId, vId, range.from, range.to]),
+        pool.query(`SELECT COALESCE(SUM(quantity),0) AS qty FROM orders WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4 AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'`, [cId, vId, range.from, range.to]),
+      ])
+      totalAmount  = parseInt(allQtyR.rows[0].qty) * pricePerUnit
+      unpaidAmount = parseInt(unpaidQtyR.rows[0].qty) * pricePerUnit
+    }
 
     if (totalDelivered === 0) {
       await sendText(pid, phone, `📭 No delivered orders found for this period.\n\nIf you think this is wrong, please contact your vendor.`)
@@ -1182,7 +1234,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Send PDF (shows all delivered)
+    // Send PDF
     try {
       await buildAndSendInvoice(pid, phone, cId, vId, range.from, range.to)
     } catch (err) {
@@ -1193,13 +1245,12 @@ async function handleCustomerBot(msg, pid) {
     }
 
     // All already paid
-    if (unpaidQty === 0) {
+    if (unpaidAmount <= 0) {
       await sendText(pid, phone,
         `✅ *Bill — ${entry.label}*\n\n` +
         `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
-        `📦 Delivered: ${totalDelivered} packet${totalDelivered > 1 ? "s" : ""}\n` +
-        `${pricePerUnit > 0 ? `🧾 Total: ₹${(totalDelivered * pricePerUnit).toFixed(2)}\n` : ""}` +
-        `\n🎉 *This bill is fully paid!* Thank you.`
+        `🧾 Total: ₹${totalAmount.toFixed(2)}\n\n` +
+        `🎉 *This bill is fully paid!* Thank you.`
       )
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
@@ -1208,19 +1259,12 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Some or all unpaid — show split summary
-    const paidLine   = paidQty > 0 ? `✅ Paid: ${paidQty} packet${paidQty > 1 ? "s" : ""}\n` : ""
-    const amtLine    = pricePerUnit > 0
-      ? `💰 Rate: ₹${pricePerUnit}/packet\n🧾 *Amount Due: ₹${unpaidAmount.toFixed(2)}*`
-      : `📦 Unpaid packets: ${unpaidQty}`
-
+    // Some or all unpaid
     await sendButtons(pid, phone,
-      `📊 *Bill — ${entry.label}*\n\n` +
+      `🧾 *Bill — ${entry.label}*\n\n` +
       `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
-      `📦 Total delivered: ${totalDelivered} packets\n` +
-      `${paidLine}` +
-      `⏳ Pending: ${unpaidQty} packet${unpaidQty > 1 ? "s" : ""}\n` +
-      `${amtLine}\n\n` +
+      `💰 Total: ₹${totalAmount.toFixed(2)}\n` +
+      `🔴 *Amount Due: ₹${unpaidAmount.toFixed(2)}*\n\n` +
       `Already paid? Tap *Mark as Paid* and we'll record it.`,
       [
         { id: "confirm_pay", title: "✅ Mark as Paid" },
