@@ -138,14 +138,33 @@ router.get("/orders", async (req, res) => {
         o.quantity,
         o.order_date,
         a.name   AS apartment,
-        b.block_name
+        b.block_name,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'item_id',                  oi.item_id,
+              'product_name',             p.name,
+              'unit',                     p.unit,
+              'quantity',                 oi.quantity,
+              'price_at_order',           oi.price_at_order,
+              'delivery_charge_at_order', oi.delivery_charge_at_order,
+              'order_type',               oi.order_type
+            ) ORDER BY oi.order_type DESC, oi.item_id
+          ) FILTER (WHERE oi.item_id IS NOT NULL),
+          '[]'::json
+        ) AS items
       FROM orders o
       JOIN customers c ON o.customer_id = c.customer_id
       LEFT JOIN customer_vendor_profile cv
         ON cv.customer_id = c.customer_id AND cv.vendor_id = $1
       LEFT JOIN apartments a ON cv.apartment_id = a.apartment_id
       LEFT JOIN apartment_blocks b ON cv.block_id = b.block_id
+      LEFT JOIN order_items oi ON oi.order_id = o.order_id
+      LEFT JOIN products p ON p.product_id = oi.product_id
       WHERE o.vendor_id = $1
+      GROUP BY o.order_id, o.is_delivered, o.delivered_at, c.phone,
+               cv.address_type, a.name, a.address, b.block_name, cv.flat_number,
+               cv.manual_address, o.quantity, o.order_date
       ORDER BY o.order_date DESC
     `, [vendorId])
 
@@ -1050,6 +1069,305 @@ router.delete("/pauses/:pauseId", requireAdmin, async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
+  }
+})
+
+/* ══════════════════════════════════════════
+   PRODUCTS
+══════════════════════════════════════════ */
+
+// GET /products — list all vendor products
+router.get("/products", async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { rows } = await pool.query(`
+      SELECT product_id, name, unit, price, delivery_charge, order_type, is_active, sort_order, created_at
+      FROM products
+      WHERE vendor_id = $1
+      ORDER BY sort_order, product_id
+    `, [vendorId])
+    res.json({ products: rows })
+  } catch (e) {
+    res.status(401).json({ message: e.message })
+  }
+})
+
+// POST /products — create product
+router.post("/products", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { name, unit = "", price, delivery_charge = 0, order_type = "both", sort_order = 0 } = req.body
+    if (!name || price == null) return res.status(400).json({ message: "name and price are required" })
+
+    const { rows } = await pool.query(`
+      INSERT INTO products (vendor_id, name, unit, price, delivery_charge, order_type, sort_order)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING *
+    `, [vendorId, name.trim(), unit.trim(), price, delivery_charge, order_type, sort_order])
+
+    const product = rows[0]
+    await pool.query(`
+      INSERT INTO product_price_history (product_id, price, delivery_charge, effective_from)
+      VALUES ($1,$2,$3,CURRENT_DATE)
+    `, [product.product_id, price, delivery_charge])
+
+    res.json({ product })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ message: e.message })
+  }
+})
+
+// PUT /products/:id — update product (saves price history if price changed)
+router.put("/products/:id", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { name, unit = "", price, delivery_charge = 0, order_type, is_active, sort_order = 0 } = req.body
+
+    const { rows: old } = await pool.query(
+      `SELECT price, delivery_charge FROM products WHERE product_id=$1 AND vendor_id=$2`,
+      [req.params.id, vendorId]
+    )
+    if (!old.length) return res.status(404).json({ message: "Product not found" })
+
+    const { rows } = await pool.query(`
+      UPDATE products
+      SET name=$1, unit=$2, price=$3, delivery_charge=$4, order_type=$5, is_active=$6, sort_order=$7
+      WHERE product_id=$8 AND vendor_id=$9
+      RETURNING *
+    `, [name.trim(), unit.trim(), price, delivery_charge, order_type, is_active, sort_order, req.params.id, vendorId])
+
+    const priceChanged =
+      parseFloat(old[0].price)            !== parseFloat(price) ||
+      parseFloat(old[0].delivery_charge)  !== parseFloat(delivery_charge)
+
+    if (priceChanged) {
+      await pool.query(`
+        INSERT INTO product_price_history (product_id, price, delivery_charge, effective_from)
+        VALUES ($1,$2,$3,CURRENT_DATE)
+      `, [req.params.id, price, delivery_charge])
+    }
+
+    res.json({ product: rows[0] })
+  } catch (e) {
+    console.error(e)
+    res.status(500).json({ message: e.message })
+  }
+})
+
+// PATCH /products/:id/toggle — toggle active/inactive
+router.patch("/products/:id/toggle", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { rows } = await pool.query(`
+      UPDATE products SET is_active = NOT is_active
+      WHERE product_id=$1 AND vendor_id=$2
+      RETURNING is_active
+    `, [req.params.id, vendorId])
+    if (!rows.length) return res.status(404).json({ message: "Product not found" })
+    res.json({ is_active: rows[0].is_active })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+// DELETE /products/:id
+router.delete("/products/:id", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    await pool.query(
+      `DELETE FROM products WHERE product_id=$1 AND vendor_id=$2`,
+      [req.params.id, vendorId]
+    )
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+// GET /products/:id/price-history
+router.get("/products/:id/price-history", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const check = await pool.query(
+      `SELECT 1 FROM products WHERE product_id=$1 AND vendor_id=$2`,
+      [req.params.id, vendorId]
+    )
+    if (!check.rowCount) return res.status(404).json({ message: "Not found" })
+    const { rows } = await pool.query(`
+      SELECT history_id, price, delivery_charge, effective_from, created_at
+      FROM product_price_history
+      WHERE product_id=$1
+      ORDER BY effective_from DESC, created_at DESC
+    `, [req.params.id])
+    res.json({ history: rows })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+/* ══════════════════════════════════════════
+   CUSTOMER SUBSCRIPTIONS (per product)
+══════════════════════════════════════════ */
+
+// GET /customer-subscriptions/:customerId — list per-product subscriptions
+router.get("/customer-subscriptions/:customerId", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { rows } = await pool.query(`
+      SELECT cs.subscription_id, cs.product_id, cs.quantity, cs.is_active, cs.created_at,
+             p.name, p.unit, p.price, p.delivery_charge, p.order_type, p.is_active AS product_active
+      FROM customer_subscriptions cs
+      JOIN products p ON p.product_id = cs.product_id
+      WHERE cs.customer_id=$1 AND cs.vendor_id=$2
+      ORDER BY p.sort_order, p.product_id
+    `, [req.params.customerId, vendorId])
+    res.json({ subscriptions: rows })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+// POST /customer-subscriptions — upsert subscription
+router.post("/customer-subscriptions", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { customer_id, product_id, quantity = 1, is_active = true } = req.body
+    const { rows } = await pool.query(`
+      INSERT INTO customer_subscriptions (customer_id, vendor_id, product_id, quantity, is_active)
+      VALUES ($1,$2,$3,$4,$5)
+      ON CONFLICT (customer_id, product_id)
+      DO UPDATE SET quantity=$4, is_active=$5
+      RETURNING *
+    `, [customer_id, vendorId, product_id, quantity, is_active])
+
+    // Ensure base subscription is active when adding a product sub
+    if (is_active) {
+      await pool.query(`
+        INSERT INTO subscriptions (customer_id, vendor_id, quantity, status)
+        VALUES ($1,$2,$3,'active')
+        ON CONFLICT (customer_id, vendor_id) DO UPDATE SET status='active'
+      `, [customer_id, vendorId, quantity])
+    }
+
+    res.json({ subscription: rows[0] })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+// DELETE /customer-subscriptions/:id — remove product subscription
+router.delete("/customer-subscriptions/:id", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    await pool.query(
+      `DELETE FROM customer_subscriptions WHERE subscription_id=$1 AND vendor_id=$2`,
+      [req.params.id, vendorId]
+    )
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+/* ══════════════════════════════════════════
+   ORDER ITEMS
+══════════════════════════════════════════ */
+
+// GET /orders/:id/items — get line items for an order
+router.get("/orders/:id/items", async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { rows } = await pool.query(`
+      SELECT oi.item_id, oi.product_id, oi.quantity, oi.price_at_order,
+             oi.delivery_charge_at_order, oi.order_type, oi.created_at,
+             p.name AS product_name, p.unit
+      FROM order_items oi
+      JOIN products p ON p.product_id = oi.product_id
+      JOIN orders o   ON o.order_id   = oi.order_id
+      WHERE oi.order_id = $1 AND o.vendor_id = $2
+      ORDER BY oi.order_type DESC, oi.item_id
+    `, [req.params.id, vendorId])
+    res.json({ items: rows })
+  } catch (e) {
+    res.status(401).json({ message: e.message })
+  }
+})
+
+/* ══════════════════════════════════════════
+   MESSAGES INBOX
+══════════════════════════════════════════ */
+
+// GET /messages — latest message per phone (conversation list)
+router.get("/messages", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (m.phone)
+        m.message_id, m.phone, m.content, m.message_type, m.direction,
+        m.created_at, m.is_read, m.customer_id,
+        c.phone AS customer_phone
+      FROM messages m
+      LEFT JOIN customers c ON c.customer_id = m.customer_id
+      WHERE m.vendor_id = $1
+      ORDER BY m.phone, m.created_at DESC
+    `, [vendorId])
+
+    // Count unread per phone
+    const { rows: unread } = await pool.query(`
+      SELECT phone, COUNT(*) AS cnt
+      FROM messages
+      WHERE vendor_id=$1 AND direction='inbound' AND is_read=false
+      GROUP BY phone
+    `, [vendorId])
+    const unreadMap = {}
+    unread.forEach(r => { unreadMap[r.phone] = parseInt(r.cnt) })
+
+    const conversations = rows
+      .map(r => ({ ...r, unread_count: unreadMap[r.phone] || 0 }))
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+
+    res.json({ conversations })
+  } catch (e) {
+    res.status(401).json({ message: e.message })
+  }
+})
+
+// GET /messages/unread-count
+router.get("/messages/unread-count", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { rows } = await pool.query(`
+      SELECT COUNT(DISTINCT phone) AS count
+      FROM messages
+      WHERE vendor_id=$1 AND direction='inbound' AND is_read=false
+    `, [vendorId])
+    res.json({ count: parseInt(rows[0].count) })
+  } catch (e) {
+    res.status(401).json({ message: e.message })
+  }
+})
+
+// GET /messages/:phone — full conversation thread (marks as read)
+router.get("/messages/thread/:phone", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const phone    = decodeURIComponent(req.params.phone)
+    const { rows } = await pool.query(`
+      SELECT message_id, direction, message_type, content, media_id, is_read, created_at
+      FROM messages
+      WHERE vendor_id=$1 AND phone=$2
+      ORDER BY created_at ASC
+    `, [vendorId, phone])
+
+    await pool.query(
+      `UPDATE messages SET is_read=true WHERE vendor_id=$1 AND phone=$2 AND direction='inbound'`,
+      [vendorId, phone]
+    )
+
+    res.json({ messages: rows, phone })
+  } catch (e) {
+    res.status(401).json({ message: e.message })
   }
 })
 
