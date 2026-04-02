@@ -488,7 +488,7 @@ app.use(express.static("public"))
 | `WHATSAPP_TOKEN` | Yes | Meta Cloud API bearer token |
 | `MAIN_VENDOR_PHONE_NUMBER_ID` | Yes | Primary vendor's phone number ID |
 | `JWT_SECRET` | Yes | Secret for signing vendor dashboard tokens |
-| `REGISTRATION_FLOW_ID` | Yes | WhatsApp Flow ID for customer registration |
+| `REGISTRATION_FLOW_ID` | No | ~~Not needed~~ — Flow ID is embedded in the template, not passed at send time |
 | `APP_BASE_URL` | Yes | Frontend URL (e.g. `http://localhost:5173/`) |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Yes | DB credentials |

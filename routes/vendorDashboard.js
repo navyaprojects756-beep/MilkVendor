@@ -1478,10 +1478,17 @@ router.post("/whatsapp-flow-data", async (req, res) => {
 
     } else if (action === "INIT" || action === "data_exchange") {
 
-      if (screen === "WELCOME" || action === "INIT") {
-        const addressType = flowData?.address_type
+      if (action === "INIT") {
+        // First open — return WELCOME screen (no dynamic data needed)
+        responsePayload = { screen: "WELCOME", data: {} }
+
+      } else if (screen === "WELCOME") {
+        // User submitted name + address type
+        const addressType  = flowData?.address_type
+        const customerName = flowData?.customer_name || ""
 
         if (addressType === "apartment") {
+          // Load apartment list for this vendor
           let vendorId = null
           try { if (payload.flow_token) vendorId = parseInt(payload.flow_token) } catch {}
 
@@ -1492,18 +1499,20 @@ router.post("/whatsapp-flow-data", async (req, res) => {
           responsePayload = {
             screen: "APARTMENT_ADDRESS",
             data: {
-              customer_name: flowData?.customer_name || "",
+              customer_name: customerName,
               apartments: aptQuery.rows.map((a) => ({ id: String(a.apartment_id), title: a.name })),
             },
           }
         } else {
+          // House — go straight to manual address screen
           responsePayload = {
             screen: "HOUSE_ADDRESS",
-            data: { customer_name: flowData?.customer_name || "" },
+            data: { customer_name: customerName },
           }
         }
 
       } else if (screen === "APARTMENT_ADDRESS") {
+        // User selected apartment — load blocks
         const aptId = flowData?.apartment_id
         const { rows: blockRows } = await pool.query(
           "SELECT block_id, block_name FROM apartment_blocks WHERE apartment_id=$1 ORDER BY block_name",

@@ -3,7 +3,9 @@
     "allow": [
       "Read(//e/Navya Projects/vendor-dashboard/src/**)",
       "Bash(grep -r \"role\\\\|permission\\\\|delivery\\\\|admin\\\\|access\" 'E:/Navya Projects/MilkWhatsAppBot' --include=*.js --include=*.sql)",
-      "Read(//e/Navya Projects/vendor-dashboard/**)"
+      "Read(//e/Navya Projects/vendor-dashboard/**)",
+      "WebFetch(domain:developers.facebook.com)",
+      "WebSearch"
     ],
     "additionalDirectories": [
       "E:\\Navya Projects\\vendor-dashboard\\src\\services",

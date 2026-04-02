@@ -30,11 +30,9 @@ async function sendText(pid, phone, text) {
 }
 
 // ── Send the registration flow template to a new user ──
-// Fill in FLOW_ID after publishing the flow in Meta
-const REGISTRATION_FLOW_ID       = process.env.REGISTRATION_FLOW_ID || "YOUR_FLOW_ID"
-const REGISTRATION_TEMPLATE_NAME = "customer_registration"
+const REGISTRATION_TEMPLATE_NAME = "customer_registration_v2"
 
-async function sendRegistrationFlow(pid, phone, vendorId) {
+async function sendRegistrationFlow(pid, phone, vendorId, businessName) {
   await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
     to:   phone,
@@ -44,16 +42,17 @@ async function sendRegistrationFlow(pid, phone, vendorId) {
       language: { code: "en" },
       components: [
         {
+          type: "header",
+          parameters: [{ type: "text", text: businessName || "MilkRoute" }]
+        },
+        {
           type: "button",
           sub_type: "flow",
           index: "0",
           parameters: [
             {
               type:   "action",
-              action: {
-                flow_id:    REGISTRATION_FLOW_ID,
-                flow_token: String(vendorId),
-              }
+              action: { flow_token: String(vendorId) }
             }
           ]
         }
@@ -676,6 +675,9 @@ async function handleCustomerBot(msg, pid) {
 
   const withProducts = await hasVendorProducts(vendor.vendor_id)
 
+  const vId = vendor.vendor_id
+  const cId = customer.customer_id
+
   let input = null
   if (msg.type === "text")        input = msg.text?.body?.trim()
   if (msg.type === "interactive") input = msg.interactive?.list_reply?.id || msg.interactive?.button_reply?.id
@@ -712,8 +714,6 @@ async function handleCustomerBot(msg, pid) {
   if (!input && !MEDIA_STATES.includes(state?.state) && !isMedia) return
 
   const inputLower = (input || "").toLowerCase()
-  const vId = vendor.vendor_id
-  const cId = customer.customer_id
 
   /* ── Global: greetings and menu reset ── */
 
@@ -729,7 +729,11 @@ async function handleCustomerBot(msg, pid) {
     if (!state || isReset) {
       // ── New user with no address → send registration flow ──
       if (!addr && !sub) {
-        await sendRegistrationFlow(pid, phone, vId)
+        const bizName = (profile?.business_name || "MilkRoute").trim()
+        await sendText(pid, phone,
+          `👋 Welcome to *${bizName}*!\n\nTo start receiving daily deliveries, please complete your account setup by tapping the button below. It only takes a minute! 🥛`
+        )
+        await sendRegistrationFlow(pid, phone, vId, bizName)
         await setState(phone, "awaiting_registration", vId)
         return
       }
