@@ -49,7 +49,7 @@ async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, m
           flow_message_version: "3",
           flow_token:           `${vendorId}:${customerId}:${mode}`,
           flow_id:              PRODUCT_LIST_FLOW_ID,
-          flow_cta:             mode === "adhoc" ? "Place Order" : "Manage Products",
+          flow_cta:             mode === "adhoc" ? "Order Tomorrow" : "Daily Products",
           flow_action:          "data_exchange"
         }
       }
@@ -68,7 +68,7 @@ async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessN
     type: "interactive",
     interactive: {
       type: "flow",
-      body: { text: `${currentSummary}Please update your delivery address below.` },
+      body: { text: `${currentSummary}Please review and update your profile details below.` },
       action: {
         name: "flow",
         parameters: {
@@ -538,22 +538,22 @@ async function downloadWhatsAppMedia(mediaId) {
 
 /* ─── MENU SENDERS ─────────────────────────────────────── */
 
-async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts = false) {
+async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts = false, showPrompt = false) {
   const name = (profile?.business_name || "Milk Service").trim()
   const vendorId = profile?.vendor_id || sub?.vendor_id || pause?.vendor_id || null
   const menuCtx = await getMenuContextByPhone(phone, vendorId)
   let header, rows
 
   if (!sub) {
-    header = `🥛 *${name}*\n\nHow can we help you today?`
+    header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = []
     if (menuCtx.hasViewData) {
       rows.push({ id: "view", title: "📋 View Subscription", description: "View subscription or order details" })
     }
     if (withProducts) {
       rows.push(
-        { id: "manage_products", title: "📦 Browse Products", description: "Choose products for daily delivery" },
-        { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order items for tomorrow only" },
+        { id: "manage_products", title: "📦 Subscribe Daily Products", description: "Choose your daily delivery products" },
+        { id: "adhoc_order",     title: "🛒 Order Tomorrow Products",  description: "Order extra products for tomorrow" },
         { id: "profile",         title: "👤 Profile",         description: "View or update your details" }
       )
     } else {
@@ -566,7 +566,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     const until = pause.pause_until
       ? `until *${displayDate(pause.pause_until)}*`
       : `— resumes when you're ready`
-    header = `🥛 *${name}*\n\n⏸ Delivery paused ${until}`
+    header = showPrompt ? `🥛 *${name}*\n\n⏸ Delivery paused ${until}` : `🥛 *${name}*\n\n⏸ Paused ${until}`
     rows = [
       { id: "view",         title: "📋 View Subscription", description: "View delivery details"         },
       { id: "resume_pause", title: "▶️ Resume Now",         description: "End pause & restart delivery"  },
@@ -574,10 +574,10 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice",  title: "🧾 Get Bill",           description: "Download your bill"            },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 Manage Products", description: "Manage subscription products" })
+      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Subscription Products", description: "Update your daily delivery products" })
     }
   } else if (sub.status === "active") {
-    header = `🥛 *${name}*\n\nHow can we help you today?`
+    header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = [
       { id: "view",        title: "📋 View Subscription", description: "View delivery details"       },
       { id: "profile",     title: "👤 Profile",           description: "View or update your details" },
@@ -585,13 +585,13 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"          },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 Manage Products", description: "Manage subscription products" })
-      rows.splice(2, 0, { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order extra items for tomorrow" })
+      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Subscription Products", description: "Update your daily delivery products" })
+      rows.splice(2, 0, { id: "adhoc_order",     title: "🛒 Order Tomorrow Products",            description: "Order extra products for tomorrow" })
     } else {
       rows.splice(1, 0, { id: "change", title: "✏️ Change Quantity", description: "Update daily packets" })
     }
   } else {
-    header = `🥛 *${name}*\n\nHow can we help you today?`
+    header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = []
     if (menuCtx.hasViewData) {
       rows.push({ id: "view", title: "📋 View Subscription", description: "View subscription or order details" })
@@ -601,7 +601,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"       }
     )
     if (withProducts) {
-      rows.unshift({ id: "manage_products", title: "📦 Manage Products", description: "Choose products and subscribe again" })
+      rows.unshift({ id: "manage_products", title: "📦 Subscribe Daily Products", description: "Choose your daily delivery products" })
     } else {
       rows.unshift(
         { id: "resume",  title: "▶️ Resume Delivery",  description: `Continue with ${sub.quantity} packet/day` },
@@ -689,7 +689,7 @@ async function sendAdhocProductList(pid, phone, vendorId, cart = []) {
   rows.push({ id: "menu", title: "🏠 Main Menu" })
 
   await sendList(pid, phone,
-    `🛒 *Quick Order*${headerSuffix}`,
+    `🛒 *Order Tomorrow Products*${headerSuffix}`,
     rows, cartCount > 0 ? "Cart" : "Select"
   )
 }
@@ -959,7 +959,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts, true)
     return
   }
 
@@ -991,7 +991,7 @@ async function handleCustomerBot(msg, pid) {
         return
       }
       await sendProductListFlow(pid, phone, cId, vId,
-        `📦 *Your Daily Products*\n\nSet your daily quantity for each product below. Leave blank to keep unchanged.`
+        `📦 *Daily Subscription Products*\n\nSet your daily quantity for each product below. Leave blank to keep unchanged.`
       )
       await setState(phone, "manage_products", vId)
       return
@@ -1007,7 +1007,7 @@ async function handleCustomerBot(msg, pid) {
       }
       const tomorrow = istTomorrowStr()
       await sendProductListFlow(pid, phone, cId, vId,
-        `🛒 *Quick Order*\n\nEnter quantity for each item you want delivered on *${displayDate(tomorrow)}*.\nLeave blank to skip.`,
+        `🛒 *Order Tomorrow Products*\n\nEnter quantity for each product you want delivered on *${displayDate(tomorrow)}*.\nLeave blank to skip.`,
         "adhoc"
       )
       await setState(phone, "adhoc_product", vId, { cart: [] })
@@ -1037,7 +1037,7 @@ async function handleCustomerBot(msg, pid) {
       const hasViewData = !!sub || activeProdSubs.length > 0 || !!(await getMenuContextByPhone(phone, vId)).hasOrders
 
       if (!hasViewData) {
-        await sendText(pid, phone, "🥛 You don’t have any subscription or order details yet.\n\nYou can browse products for daily delivery or place a quick order.")
+        await sendText(pid, phone, "🥛 You don’t have any subscription or order details yet.\n\nYou can subscribe to daily products or order products for tomorrow.")
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
         return
       }
@@ -1094,7 +1094,7 @@ async function handleCustomerBot(msg, pid) {
       }
 
       if (qItems.length > 0) {
-        text += `\n\n🛒 *Quick Order for ${displayDate(latestAdhocDate)}:*\n`
+        text += `\n\n🛒 *Tomorrow Order for ${displayDate(latestAdhocDate)}:*\n`
         qItems.forEach(item => {
           const qty = parseFloat(item.quantity || 0)
           const price = parseFloat(item.price_at_order || 0)
@@ -1120,7 +1120,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Edit profile
+    // Profile
     if (input === "profile") {
       const addr = await getAddress(cId, vId)
       await startAddressFlow(pid, phone, cId, vendor, false, addr || null)
@@ -1144,7 +1144,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Pause delivery — opens pause submenu
+    // Pause delivery
     if (input === "pause") {
       await sendPauseMenu(pid, phone)
       await setState(phone, "pause_select", vId)
