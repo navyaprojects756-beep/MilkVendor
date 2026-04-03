@@ -57,22 +57,24 @@ async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, m
 }
 
 // ── Send address update as free interactive message (within session, not template) ──
-async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessName, currentAddr) {
-  const addrLine = currentAddr ? `📍 *Current:* ${currentAddr}\n\n` : ""
+async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessName, currentName, currentAddr) {
+  const nameLine = currentName ? `👤 *Name:* ${currentName}\n` : ""
+  const addrLine = currentAddr ? `📍 *Current:* ${currentAddr}\n` : ""
+  const currentSummary = nameLine || addrLine ? `${nameLine}${addrLine}\n` : ""
   await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
     to:   phone,
     type: "interactive",
     interactive: {
       type: "flow",
-      body: { text: `${addrLine}Please update your delivery address below.` },
+      body: { text: `${currentSummary}Please update your delivery address below.` },
       action: {
         name: "flow",
         parameters: {
           flow_message_version: "3",
           flow_token:           `${vendorId}:${customerId}:update`,
           flow_id:              process.env.REGISTRATION_FLOW_ID,
-          flow_cta:             "Open Profile",
+          flow_cta:             "Edit Profile",
           flow_action:          "data_exchange"
         }
       }
@@ -276,6 +278,47 @@ async function getSubscription(cId, vId) {
     "SELECT * FROM subscriptions WHERE customer_id=$1 AND vendor_id=$2",
     [cId, vId]
   )).rows[0] || null
+}
+
+async function getCustomerById(customerId) {
+  if (!customerId) return null
+  const r = await pool.query("SELECT * FROM customers WHERE customer_id=$1", [customerId])
+  return r.rows[0] || null
+}
+
+async function getMenuContextByPhone(phone, vendorId) {
+  if (!phone || !vendorId) {
+    return { hasViewData: false, hasProductSubs: false, hasOrders: false }
+  }
+
+  const customer = await getCustomer(phone)
+  if (!customer?.customer_id) {
+    return { hasViewData: false, hasProductSubs: false, hasOrders: false }
+  }
+
+  const [prodSubsRes, ordersRes] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*) AS cnt
+       FROM customer_subscriptions
+       WHERE customer_id=$1 AND vendor_id=$2 AND is_active=true AND quantity > 0`,
+      [customer.customer_id, vendorId]
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS cnt
+       FROM orders
+       WHERE customer_id=$1 AND vendor_id=$2`,
+      [customer.customer_id, vendorId]
+    ),
+  ])
+
+  const hasProductSubs = parseInt(prodSubsRes.rows[0]?.cnt || 0, 10) > 0
+  const hasOrders = parseInt(ordersRes.rows[0]?.cnt || 0, 10) > 0
+
+  return {
+    hasProductSubs,
+    hasOrders,
+    hasViewData: hasProductSubs || hasOrders,
+  }
 }
 
 async function saveSubscription(cId, vId, qty) {
@@ -496,20 +539,28 @@ async function downloadWhatsAppMedia(mediaId) {
 
 async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts = false) {
   const name = (profile?.business_name || "Milk Service").trim()
+  const vendorId = profile?.vendor_id || sub?.vendor_id || pause?.vendor_id || null
+  const menuCtx = await getMenuContextByPhone(phone, vendorId)
   let header, rows
 
   if (!sub) {
     header = `🥛 *${name}*\n\nHow can we help you today?`
-    rows = withProducts
-      ? [
-          { id: "manage_products", title: "📦 Browse Products", description: "Choose products for daily delivery" },
-          { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order items for tomorrow only" },
-          { id: "profile",         title: "👤 Profile",          description: "View or update your details" },
-        ]
-      : [
-          { id: "subscribe", title: "🥛 Subscribe Now", description: "Start daily milk delivery" },
-          { id: "profile",   title: "👤 Profile",       description: "View or update your details" },
-        ]
+    rows = []
+    if (menuCtx.hasViewData) {
+      rows.push({ id: "view", title: "📋 View Subscription", description: "View subscription or order details" })
+    }
+    if (withProducts) {
+      rows.push(
+        { id: "manage_products", title: "📦 Browse Products", description: "Choose products for daily delivery" },
+        { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order items for tomorrow only" },
+        { id: "profile",         title: "👤 Profile",         description: "View or update your details" }
+      )
+    } else {
+      rows.push(
+        { id: "subscribe", title: "🥛 Subscribe Now", description: "Start daily milk delivery" },
+        { id: "profile",   title: "👤 Profile",       description: "View or update your details" }
+      )
+    }
   } else if (sub.status === "active" && pause) {
     const until = pause.pause_until
       ? `until *${displayDate(pause.pause_until)}*`
@@ -540,10 +591,14 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     }
   } else {
     header = `🥛 *${name}*\n\nHow can we help you today?`
-    rows = [
+    rows = []
+    if (menuCtx.hasViewData) {
+      rows.push({ id: "view", title: "📋 View Subscription", description: "View subscription or order details" })
+    }
+    rows.push(
       { id: "profile",     title: "👤 Profile",           description: "View or update your details" },
-      { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"       },
-    ]
+      { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"       }
+    )
     if (withProducts) {
       rows.unshift({ id: "manage_products", title: "📦 Manage Products", description: "Choose products and subscribe again" })
     } else {
@@ -656,8 +711,18 @@ async function sendBlockMenu(pid, phone, aptId) {
 
 async function startAddressFlow(pid, phone, customerId, vendor, afterAddr = false, existingAddr = null) {
   const bizName = (vendor.business_name || "MilkRoute").trim()
+  const customer = await getCustomerById(customerId)
+  const currentName = customer?.name || null
   if (existingAddr || (!afterAddr && customerId)) {
-    await sendAddressUpdateFlow(pid, phone, vendor.vendor_id, customerId, bizName, existingAddr ? formatAddress(existingAddr) : null)
+    await sendAddressUpdateFlow(
+      pid,
+      phone,
+      vendor.vendor_id,
+      customerId,
+      bizName,
+      currentName,
+      existingAddr ? formatAddress(existingAddr) : null
+    )
   } else {
     await sendRegistrationFlow(pid, phone, vendor.vendor_id, bizName)
   }
@@ -965,47 +1030,69 @@ async function handleCustomerBot(msg, pid) {
 
     // View subscription
     if (input === "view") {
-      if (!sub) { await sendMainMenu(pid, phone, sub, profile, pause, withProducts); return }
       const addr     = await getAddress(cId, vId)
-      const tomorrow = istTomorrowStr()
+      const prodSubs = withProducts ? await getCustomerProductSubs(cId, vId) : []
+      const activeProdSubs = prodSubs.filter(s => s.is_active && parseFloat(s.quantity || 0) > 0)
+      const hasViewData = !!sub || activeProdSubs.length > 0 || !!(await getMenuContextByPhone(phone, vId)).hasOrders
+
+      if (!hasViewData) {
+        await sendText(pid, phone, "🥛 You don’t have any subscription or order details yet.\n\nYou can browse products for daily delivery or place a quick order.")
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
 
       let text = `📋 *Your Subscription*\n\n`
 
       if (withProducts) {
-        // Show per-product subscriptions from customer_subscriptions
-        const prodSubs = await getCustomerProductSubs(cId, vId)
-        const active   = prodSubs.filter(s => s.is_active)
-        if (active.length > 0) {
-          active.forEach(s => {
+        if (activeProdSubs.length > 0) {
+          activeProdSubs.forEach(s => {
             const dailyCost = (parseFloat(s.price) * s.quantity + parseFloat(s.delivery_charge || 0)).toFixed(0)
             text += `📦 *${s.name}${s.unit ? ` (${s.unit})` : ""}* — ${s.quantity}/day · ₹${dailyCost}/day\n`
           })
         } else {
-          text += `No active product subscriptions.\n`
+          text += `No active daily subscriptions.\n`
         }
-      } else {
+      } else if (sub) {
         text += `🥛 Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day\n`
+      } else {
+        text += `No active daily subscription.\n`
       }
 
       text += `\n📍 *Address:* ${formatAddress(addr)}\n`
-      if (pause) {
+      if (sub && pause) {
         text += pause.pause_until
           ? `\n⏸ *Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}*`
           : `\n⏸ *Paused (manual resume)*`
-      } else {
+      } else if (sub) {
         text += `\n✅ *Status:* Active`
+      } else {
+        text += `\nℹ️ *No daily subscription active*`
       }
 
-      // Show tomorrow's quick orders if any
-      const { rows: qItems } = await pool.query(`
-        SELECT oi.quantity, p.name, p.unit, oi.price_at_order, oi.delivery_charge_at_order
+      const { rows: latestOrderRows } = await pool.query(`
+        SELECT o.order_date
         FROM order_items oi
         JOIN orders o ON o.order_id = oi.order_id
-        JOIN products p ON p.product_id = oi.product_id
-        WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date=$3 AND oi.order_type='adhoc'
-      `, [cId, vId, tomorrow])
+        WHERE o.customer_id=$1 AND o.vendor_id=$2 AND oi.order_type='adhoc'
+        ORDER BY o.order_date DESC
+        LIMIT 1
+      `, [cId, vId])
+
+      const latestAdhocDate = latestOrderRows[0]?.order_date || null
+      let qItems = []
+      if (latestAdhocDate) {
+        const adhocItemsRes = await pool.query(`
+          SELECT oi.quantity, p.name, p.unit, oi.price_at_order, oi.delivery_charge_at_order
+          FROM order_items oi
+          JOIN orders o ON o.order_id = oi.order_id
+          JOIN products p ON p.product_id = oi.product_id
+          WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date=$3 AND oi.order_type='adhoc'
+        `, [cId, vId, latestAdhocDate])
+        qItems = adhocItemsRes.rows
+      }
+
       if (qItems.length > 0) {
-        text += `\n\n🛒 *Quick Order for ${displayDate(tomorrow)}:*\n`
+        text += `\n\n🛒 *Quick Order for ${displayDate(latestAdhocDate)}:*\n`
         qItems.forEach(item => {
           const qty = parseFloat(item.quantity || 0)
           const price = parseFloat(item.price_at_order || 0)
@@ -1029,7 +1116,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Profile
+    // Edit profile
     if (input === "profile") {
       const addr = await getAddress(cId, vId)
       await startAddressFlow(pid, phone, cId, vendor, false, addr || null)
