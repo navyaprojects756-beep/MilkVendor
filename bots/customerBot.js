@@ -1456,13 +1456,23 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Unrecognised input in menu state → save to inbox + auto-reply
-    await saveInboundMessage(vId, cId, phone, "text", input, null)
+    // Unrecognised input in menu state -> save to inbox + auto-reply
+    const inboxType = msg.type === "audio" ? "audio" : "text"
+    const inboxMediaId = msg.type === "audio" ? msg.audio?.id : null
+    await saveInboundMessage(vId, cId, phone, inboxType, input, inboxMediaId)
     const vendorPhone = settings.vendor_phone || profile.whatsapp_number || ""
     await sendText(pid, phone,
-      vendorPhone
-        ? `👋 We received your message.\n\nFor immediate help, please call:\n📞 *${vendorPhone}*`
-        : `👋 We received your message and will get back to you if needed.`
+      msg.type === "audio"
+        ? (
+            vendorPhone
+              ? `Voice messages are not allowed right now.\n\nIf needed, please call:\n${vendorPhone}`
+              : `Voice messages are not allowed right now.\n\nIf needed, please call the vendor.`
+          )
+        : (
+            vendorPhone
+              ? `We received your message.\n\nFor immediate help, please call:\n${vendorPhone}`
+              : `We received your message and will get back to you if needed.`
+          )
     )
     await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
     return
@@ -2316,11 +2326,18 @@ async function handleCustomerBot(msg, pid) {
 
   // Auto-reply with vendor contact
   const vendorPhone = settings.vendor_phone || profile.whatsapp_number || ""
-  const autoReply = vendorPhone
-    ? `👋 Thank you for your message!\n\nOur team has received it and will review it.\n\nFor immediate help, please call:\n📞 *${vendorPhone}*`
-    : `👋 Thank you for your message!\n\nOur team will review it and get back to you if needed.`
+  const autoReply = msgType === "audio"
+    ? (
+        vendorPhone
+          ? `Voice messages are not supported.\n\nPlease call the vendor for quick help:\n${vendorPhone}`
+          : `Voice messages are not supported.\n\nPlease call the vendor for quick help.`
+      )
+    : (
+        vendorPhone
+          ? `Thank you for your message!\n\nOur team has received it and will review it.\n\nFor immediate help, please call:\n${vendorPhone}`
+          : `Thank you for your message!\n\nOur team will review it and get back to you if needed.`
+      )
   await sendText(pid, phone, autoReply)
-
   const sub   = await getSubscription(cId, vId)
   const pause = await getActivePause(cId, vId)
   await setState(phone, "menu", vId)
