@@ -92,8 +92,16 @@ app.post("/webhook",async(req,res)=>{
 
  const value=req.body?.entry?.[0]?.changes?.[0]?.value
 
- if(!value || !value.messages){
-   console.log("❌ Invalid webhook payload")
+ if(!value){
+   console.log("⚠ Ignored webhook with no value payload")
+   return
+ }
+
+ if(value.statuses){
+   return
+ }
+
+ if(!value.messages || !Array.isArray(value.messages) || value.messages.length===0){
    return
  }
 

@@ -153,12 +153,24 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
   /* Current subscription quantities (for pre-population) */
   let subMap = {}
   if (mode === "sub") {
-    const { rows: subs } = await pool.query(
-      `SELECT product_id, quantity, is_active FROM customer_subscriptions
-       WHERE customer_id=$1 AND vendor_id=$2`,
-      [customerId, vendorId]
-    )
-    subs.forEach(s => { subMap[s.product_id] = s })
+    const [{ rows: baseSubs }, { rows: subs }] = await Promise.all([
+      pool.query(
+        `SELECT status
+         FROM subscriptions
+         WHERE customer_id=$1 AND vendor_id=$2
+         LIMIT 1`,
+        [customerId, vendorId]
+      ),
+      pool.query(
+        `SELECT product_id, quantity, is_active FROM customer_subscriptions
+         WHERE customer_id=$1 AND vendor_id=$2`,
+        [customerId, vendorId]
+      ),
+    ])
+
+    if (baseSubs[0]?.status === "active") {
+      subs.forEach(s => { subMap[s.product_id] = s })
+    }
   }
 
   /* Tomorrow's existing adhoc items (for pre-population) */

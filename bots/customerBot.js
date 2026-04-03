@@ -502,8 +502,15 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
   if (!sub) {
     header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = withProducts
-      ? [{ id: "manage_products", title: "📦 Browse Products", description: "Subscribe to our products" }]
-      : [{ id: "subscribe", title: "🥛 Subscribe Now", description: "Start daily milk delivery" }]
+      ? [
+          { id: "manage_products", title: "📦 Browse Products", description: "Choose products for daily delivery" },
+          { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order items for tomorrow only" },
+          { id: "profile",         title: "📍 Update Address",  description: "Change delivery location" },
+        ]
+      : [
+          { id: "subscribe", title: "🥛 Subscribe Now", description: "Start daily milk delivery" },
+          { id: "profile",   title: "📍 Update Address", description: "Change delivery location" },
+        ]
   } else if (sub.status === "active" && pause) {
     const until = pause.pause_until
       ? `until *${displayDate(pause.pause_until)}*`
@@ -728,6 +735,13 @@ async function handleCustomerBot(msg, pid) {
     const formData = JSON.parse(msg.interactive.nfm_reply.response_json || "{}")
     console.log("📦 Product flow nfm_reply formData:", JSON.stringify(formData))
     const hasProductQtyKeys = Object.keys(formData || {}).some((key) => /^qty_\d+$/.test(key))
+    const isTokenOnlyFlowReply = !!formData?.flow_token && Object.keys(formData || {}).length === 1
+
+    // Once adhoc confirmation is already shown, later token-only flow replies are just noise.
+    if (isTokenOnlyFlowReply && state?.state === "flow_adhoc_confirm") {
+      console.log("📦 Ignoring token-only product flow nfm_reply")
+      return
+    }
 
     // Product-list flow replies can arrive without the bot needing to process them here again.
     // Guard them so they are never misread as registration/address flow submissions.
@@ -994,7 +1008,10 @@ async function handleCustomerBot(msg, pid) {
       if (qItems.length > 0) {
         text += `\n\n🛒 *Quick Order for ${displayDate(tomorrow)}:*\n`
         qItems.forEach(item => {
-          const cost = (item.price_at_order * item.quantity + (item.delivery_charge_at_order || 0)).toFixed(0)
+          const qty = parseFloat(item.quantity || 0)
+          const price = parseFloat(item.price_at_order || 0)
+          const delivery = parseFloat(item.delivery_charge_at_order || 0)
+          const cost = (qty * (price + delivery)).toFixed(0)
           text += `• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
         })
       }
