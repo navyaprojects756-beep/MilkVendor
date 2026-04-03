@@ -1460,6 +1460,50 @@ function encryptFlowResponse(responseData, aesKey, iv) {
   return Buffer.concat([encrypted, tag]).toString("base64")
 }
 
+async function getRegistrationPrefill(flowToken) {
+  const parts = String(flowToken || "").split(":")
+  const vendorId = parseInt(parts[0], 10)
+  const customerId = parseInt(parts[1], 10)
+  const mode = parts[2] || "new"
+
+  if (!vendorId) {
+    return { vendorId: null, mode, customer: null, profile: null, apartments: [] }
+  }
+
+  const apartmentsRes = await pool.query(
+    "SELECT apartment_id, name FROM apartments WHERE vendor_id=$1 ORDER BY name",
+    [vendorId]
+  )
+
+  if (!customerId) {
+    return {
+      vendorId,
+      mode,
+      customer: null,
+      profile: null,
+      apartments: apartmentsRes.rows,
+    }
+  }
+
+  const [customerRes, profileRes] = await Promise.all([
+    pool.query("SELECT customer_id, name FROM customers WHERE customer_id=$1", [customerId]),
+    pool.query(`
+      SELECT cv.address_type, cv.apartment_id, cv.block_id, cv.flat_number, cv.manual_address
+      FROM customer_vendor_profile cv
+      WHERE cv.customer_id=$1 AND cv.vendor_id=$2
+      LIMIT 1
+    `, [customerId, vendorId]),
+  ])
+
+  return {
+    vendorId,
+    mode,
+    customer: customerRes.rows[0] || null,
+    profile: profileRes.rows[0] || null,
+    apartments: apartmentsRes.rows,
+  }
+}
+
 router.post("/whatsapp-flow-data", async (req, res) => {
   try {
     if (!FLOW_PRIVATE_KEY) {
@@ -1483,8 +1527,21 @@ router.post("/whatsapp-flow-data", async (req, res) => {
     } else if (action === "INIT" || action === "data_exchange") {
 
       if (action === "INIT") {
-        // First open — return WELCOME screen (no dynamic data needed)
-        responsePayload = { screen: "WELCOME", data: {} }
+        const prefill = await getRegistrationPrefill(payload.flow_token)
+        const currentName = prefill.customer?.name || ""
+        const addressType = prefill.profile?.address_type || ""
+
+        responsePayload = {
+          screen: "WELCOME",
+          data: {
+            customer_name: currentName,
+            address_type: addressType,
+            apartment_id: prefill.profile?.apartment_id ? String(prefill.profile.apartment_id) : "",
+            block_id: prefill.profile?.block_id ? String(prefill.profile.block_id) : "",
+            flat_number: prefill.profile?.flat_number || "",
+            manual_address: prefill.profile?.manual_address || "",
+          },
+        }
 
       } else if (screen === "WELCOME") {
         // User submitted name + address type
@@ -1492,26 +1549,26 @@ router.post("/whatsapp-flow-data", async (req, res) => {
         const customerName = flowData?.customer_name || ""
 
         if (addressType === "apartment") {
-          // Load apartment list for this vendor
-          let vendorId = null
-          try { if (payload.flow_token) vendorId = parseInt(payload.flow_token) } catch {}
-
-          const aptQuery = vendorId
-            ? await pool.query("SELECT apartment_id, name FROM apartments WHERE vendor_id=$1 ORDER BY name", [vendorId])
-            : await pool.query("SELECT apartment_id, name FROM apartments ORDER BY name LIMIT 50")
+          const prefill = await getRegistrationPrefill(payload.flow_token)
+          const selectedApartmentId = flowData?.apartment_id || (prefill.profile?.apartment_id ? String(prefill.profile.apartment_id) : "")
 
           responsePayload = {
             screen: "APARTMENT_ADDRESS",
             data: {
               customer_name: customerName,
-              apartments: aptQuery.rows.map((a) => ({ id: String(a.apartment_id), title: a.name })),
+              apartment_id: selectedApartmentId,
+              apartments: prefill.apartments.map((a) => ({ id: String(a.apartment_id), title: a.name })),
             },
           }
         } else {
           // House — go straight to manual address screen
+          const prefill = await getRegistrationPrefill(payload.flow_token)
           responsePayload = {
             screen: "HOUSE_ADDRESS",
-            data: { customer_name: customerName },
+            data: {
+              customer_name: customerName,
+              manual_address: flowData?.manual_address || prefill.profile?.manual_address || "",
+            },
           }
         }
 
@@ -1522,11 +1579,20 @@ router.post("/whatsapp-flow-data", async (req, res) => {
           "SELECT block_id, block_name FROM apartment_blocks WHERE apartment_id=$1 ORDER BY block_name",
           [aptId]
         )
+        const prefill = await getRegistrationPrefill(payload.flow_token)
+        const blockId = prefill.profile?.apartment_id && String(prefill.profile.apartment_id) === String(aptId)
+          ? (prefill.profile?.block_id ? String(prefill.profile.block_id) : "")
+          : ""
+        const flatNumber = prefill.profile?.apartment_id && String(prefill.profile.apartment_id) === String(aptId)
+          ? (prefill.profile?.flat_number || "")
+          : ""
         responsePayload = {
           screen: "APARTMENT_BLOCK",
           data: {
             customer_name: flowData?.customer_name || "",
             apartment_id:  aptId,
+            block_id:      blockId,
+            flat_number:   flatNumber,
             blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
           },
         }

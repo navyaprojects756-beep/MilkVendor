@@ -57,7 +57,7 @@ async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, m
 }
 
 // ── Send address update as free interactive message (within session, not template) ──
-async function sendAddressUpdateFlow(pid, phone, vendorId, businessName, currentAddr) {
+async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessName, currentAddr) {
   const addrLine = currentAddr ? `📍 *Current:* ${currentAddr}\n\n` : ""
   await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
@@ -70,7 +70,7 @@ async function sendAddressUpdateFlow(pid, phone, vendorId, businessName, current
         name: "flow",
         parameters: {
           flow_message_version: "3",
-          flow_token:           String(vendorId),
+          flow_token:           `${vendorId}:${customerId}:update`,
           flow_id:              process.env.REGISTRATION_FLOW_ID,
           flow_cta:             "Update Address",
           flow_action:          "navigate",
@@ -655,10 +655,10 @@ async function sendBlockMenu(pid, phone, aptId) {
 
 /* ─── ADDRESS FLOW ─────────────────────────────────────── */
 
-async function startAddressFlow(pid, phone, vendor, afterAddr = false, existingAddr = null) {
+async function startAddressFlow(pid, phone, customerId, vendor, afterAddr = false, existingAddr = null) {
   const bizName = (vendor.business_name || "MilkRoute").trim()
   if (existingAddr) {
-    await sendAddressUpdateFlow(pid, phone, vendor.vendor_id, bizName, formatAddress(existingAddr))
+    await sendAddressUpdateFlow(pid, phone, vendor.vendor_id, customerId, bizName, formatAddress(existingAddr))
   } else {
     await sendRegistrationFlow(pid, phone, vendor.vendor_id, bizName)
   }
@@ -954,7 +954,7 @@ async function handleCustomerBot(msg, pid) {
       const addr = await getAddress(cId, vId)
       if (!addr) {
         await sendText(pid, phone, "📍 *First, let's save your delivery address.*\n\nThis only takes a moment!")
-        await startAddressFlow(pid, phone, vendor, true)
+        await startAddressFlow(pid, phone, cId, vendor, true)
         return
       }
       const maxQty = settings.max_quantity_per_order || 5
@@ -1033,7 +1033,7 @@ async function handleCustomerBot(msg, pid) {
     // Update address
     if (input === "profile") {
       const addr = await getAddress(cId, vId)
-      await startAddressFlow(pid, phone, vendor, false, addr || null)
+      await startAddressFlow(pid, phone, cId, vendor, false, addr || null)
       return
     }
 
