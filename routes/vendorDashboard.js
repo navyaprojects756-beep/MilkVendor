@@ -40,6 +40,69 @@ function getISTDateStr(offsetDays = 0) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
 }
 
+async function restorePausedOrders(customerId, vendorId) {
+  try {
+    const today = getISTDateStr(0)
+    const archivesRes = await pool.query(
+      `SELECT archive_id, order_date, quantity, delivery_charge_amount, payment_status
+       FROM paused_orders_archive
+       WHERE customer_id=$1 AND vendor_id=$2 AND order_date >= $3
+       ORDER BY order_date ASC, archive_id ASC`,
+      [customerId, vendorId, today]
+    )
+
+    for (const arch of archivesRes.rows) {
+      const orderRes = await pool.query(
+        `INSERT INTO orders
+           (customer_id, vendor_id, order_date, quantity, delivery_charge_amount, payment_status)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (customer_id, vendor_id, order_date)
+         DO UPDATE SET
+           quantity = EXCLUDED.quantity,
+           delivery_charge_amount = EXCLUDED.delivery_charge_amount,
+           payment_status = EXCLUDED.payment_status
+         WHERE orders.is_delivered = false
+         RETURNING order_id`,
+        [customerId, vendorId, arch.order_date, arch.quantity, arch.delivery_charge_amount, arch.payment_status]
+      )
+
+      const orderId = orderRes.rows[0]?.order_id
+      if (!orderId) continue
+
+      await pool.query(`DELETE FROM order_items WHERE order_id=$1`, [orderId])
+      await pool.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
+         SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
+         FROM paused_order_items_archive
+         WHERE archive_id=$2
+         ON CONFLICT (order_id, product_id)
+         DO UPDATE SET
+           quantity = EXCLUDED.quantity,
+           price_at_order = EXCLUDED.price_at_order,
+           delivery_charge_at_order = EXCLUDED.delivery_charge_at_order,
+           order_type = EXCLUDED.order_type`,
+        [orderId, arch.archive_id]
+      )
+    }
+
+    await pool.query(
+      `DELETE FROM paused_order_items_archive
+       WHERE archive_id IN (
+         SELECT archive_id FROM paused_orders_archive
+         WHERE customer_id=$1 AND vendor_id=$2 AND order_date >= $3
+       )`,
+      [customerId, vendorId, today]
+    )
+    await pool.query(
+      `DELETE FROM paused_orders_archive
+       WHERE customer_id=$1 AND vendor_id=$2 AND order_date >= $3`,
+      [customerId, vendorId, today]
+    )
+  } catch (err) {
+    console.error("restorePausedOrders dashboard error:", err.message)
+  }
+}
+
 // Middleware: only tokens with role=admin (or legacy tokens without role) can proceed
 function requireAdmin(req, res, next) {
   try {
@@ -1147,10 +1210,12 @@ router.delete("/pauses/:pauseId", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
     const result = await pool.query(
-      "DELETE FROM subscription_pauses WHERE pause_id=$1 AND vendor_id=$2 RETURNING pause_id",
+      "DELETE FROM subscription_pauses WHERE pause_id=$1 AND vendor_id=$2 RETURNING pause_id, customer_id",
       [req.params.pauseId, vendorId]
     )
     if (result.rowCount === 0) return res.status(404).json({ error: "Pause not found" })
+    await restorePausedOrders(result.rows[0].customer_id, vendorId)
+    await generateOrdersForVendor(vendorId)
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })

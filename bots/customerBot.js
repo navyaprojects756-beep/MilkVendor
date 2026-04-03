@@ -4,6 +4,7 @@ const fs    = require("fs")
 const pool  = require("../db")
 const { generateInvoicePDF }     = require("../services/invoicePDF")
 const { refreshOrderTotals } = require("../services/orderPricing")
+const { generateOrdersForVendor } = require("../services/orderGenerator")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
@@ -258,6 +259,72 @@ async function getCustomerProductSubs(cId, vId) {
     ORDER BY p.sort_order, p.product_id
   `, [cId, vId])
   return r.rows
+}
+
+async function getUpcomingAdhocOrders(cId, vId, restored = null) {
+  const today = getISTDateStr(0)
+  const liveRes = await pool.query(
+    `SELECT o.order_id, o.order_date, COALESCE(o.delivery_charge_amount, 0) AS delivery_charge_amount,
+            oi.quantity, oi.price_at_order, oi.delivery_charge_at_order,
+            p.name, p.unit, p.sort_order, p.product_id
+     FROM orders o
+     JOIN order_items oi ON oi.order_id = o.order_id
+     JOIN products p ON p.product_id = oi.product_id
+     WHERE o.customer_id=$1
+       AND o.vendor_id=$2
+       AND o.is_delivered=false
+       AND o.order_date >= $3
+       AND oi.order_type='adhoc'
+     ORDER BY o.order_date ASC, p.sort_order, p.product_id`,
+    [cId, vId, today]
+  )
+
+  if (liveRes.rows.length) {
+    const grouped = []
+    let current = null
+    for (const row of liveRes.rows) {
+      if (!current || String(current.orderDate) !== String(row.order_date)) {
+        current = {
+          orderDate: row.order_date,
+          deliveryCharge: parseFloat(row.delivery_charge_amount || 0),
+          items: [],
+        }
+        grouped.push(current)
+      }
+      current.items.push({
+        quantity: row.quantity,
+        name: row.name,
+        unit: row.unit,
+        price_at_order: row.price_at_order,
+        delivery_charge_at_order: row.delivery_charge_at_order,
+      })
+    }
+    return grouped
+  }
+
+  if (restored?.adhocItems?.length) {
+    const productMapRes = await pool.query(
+      `SELECT product_id, name, unit FROM products WHERE vendor_id=$1 ORDER BY sort_order, product_id`,
+      [vId]
+    )
+    const productMap = new Map(productMapRes.rows.map((p) => [String(p.product_id), p]))
+    return [{
+      orderDate: restored.nextAdhocDate,
+      deliveryCharge: 0,
+      items: restored.adhocItems.map((item) => {
+        const product = productMap.get(String(item.product_id)) || {}
+        return {
+          quantity: item.quantity,
+          name: product.name || "Product",
+          unit: product.unit || "",
+          price_at_order: item.price_at_order,
+          delivery_charge_at_order: item.delivery_charge_at_order,
+        }
+      }),
+    }]
+  }
+
+  return []
 }
 
 async function saveInboundMessage(vendorId, customerId, phone, type, content, mediaId) {
@@ -531,20 +598,172 @@ async function savePause(cId, vId, from, until) {
 }
 
 async function removePausedOrders(cId, vId, from, until = null) {
-  const orderIdsRes = await pool.query(
-    `SELECT order_id
-     FROM orders
-     WHERE customer_id=$1
-       AND vendor_id=$2
-       AND is_delivered=false
-       AND order_date >= $3
-       AND ($4::date IS NULL OR order_date <= $4::date)`,
-    [cId, vId, from, until]
-  )
-  const orderIds = orderIdsRes.rows.map((r) => r.order_id)
-  if (!orderIds.length) return
-  await pool.query(`DELETE FROM order_items WHERE order_id = ANY($1::int[])`, [orderIds])
-  await pool.query(`DELETE FROM orders WHERE order_id = ANY($1::int[])`, [orderIds])
+  try {
+    const ordersRes = await pool.query(
+      `SELECT o.order_id, o.order_date, o.quantity,
+              COALESCE(o.delivery_charge_amount, 0) AS delivery_charge_amount,
+              COALESCE(o.payment_status, 'unpaid') AS payment_status
+       FROM orders o
+       WHERE o.customer_id=$1
+         AND o.vendor_id=$2
+         AND o.is_delivered=false
+         AND o.order_date >= $3
+         AND ($4::date IS NULL OR o.order_date <= $4::date)`,
+      [cId, vId, from, until]
+    )
+
+    const orderIds = []
+    for (const order of ordersRes.rows) {
+      const archiveRes = await pool.query(
+        `INSERT INTO paused_orders_archive
+           (customer_id, vendor_id, order_date, quantity, delivery_charge_amount, payment_status)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (customer_id, vendor_id, order_date)
+         DO UPDATE SET
+           quantity = EXCLUDED.quantity,
+           delivery_charge_amount = EXCLUDED.delivery_charge_amount,
+           payment_status = EXCLUDED.payment_status,
+           archived_at = NOW()
+         RETURNING archive_id`,
+        [cId, vId, order.order_date, order.quantity, order.delivery_charge_amount, order.payment_status]
+      )
+
+      const archiveId = archiveRes.rows[0]?.archive_id
+      if (!archiveId) continue
+
+      await pool.query(`DELETE FROM paused_order_items_archive WHERE archive_id=$1`, [archiveId])
+      await pool.query(
+        `INSERT INTO paused_order_items_archive
+           (archive_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
+         SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
+         FROM order_items
+         WHERE order_id=$2`,
+        [archiveId, order.order_id]
+      )
+
+      orderIds.push(order.order_id)
+    }
+
+    if (!orderIds.length) return
+    await pool.query(`DELETE FROM order_items WHERE order_id = ANY($1::int[])`, [orderIds])
+    await pool.query(`DELETE FROM orders WHERE order_id = ANY($1::int[])`, [orderIds])
+  } catch (e) {
+    console.error("removePausedOrders archive fallback:", e.message)
+  }
+}
+
+async function restorePausedOrders(cId, vId) {
+  try {
+    const today = getISTDateStr(0)
+    const restored = { nextAdhocDate: null, adhocItems: [] }
+    const archivesRes = await pool.query(
+      `SELECT archive_id, order_date, quantity, delivery_charge_amount, payment_status
+       FROM paused_orders_archive
+       WHERE customer_id=$1 AND vendor_id=$2 AND order_date >= $3
+       ORDER BY order_date ASC, archive_id ASC`,
+      [cId, vId, today]
+    )
+
+    for (const arch of archivesRes.rows) {
+      const archivedItemsRes = await pool.query(
+        `SELECT product_id, quantity, price_at_order, delivery_charge_at_order, order_type
+         FROM paused_order_items_archive
+         WHERE archive_id=$1`,
+        [arch.archive_id]
+      )
+      if (!restored.nextAdhocDate) {
+        const adhocItems = archivedItemsRes.rows.filter((item) => item.order_type === "adhoc")
+        if (adhocItems.length) {
+          restored.nextAdhocDate = arch.order_date
+          restored.adhocItems = adhocItems
+        }
+      }
+
+      const orderRes = await pool.query(
+        `INSERT INTO orders
+           (customer_id, vendor_id, order_date, quantity, delivery_charge_amount, payment_status)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (customer_id, vendor_id, order_date)
+         DO UPDATE SET
+           quantity = EXCLUDED.quantity,
+           delivery_charge_amount = EXCLUDED.delivery_charge_amount,
+           payment_status = EXCLUDED.payment_status
+         WHERE orders.is_delivered = false
+         RETURNING order_id`,
+        [cId, vId, arch.order_date, arch.quantity, arch.delivery_charge_amount, arch.payment_status]
+      )
+
+      const orderId = orderRes.rows[0]?.order_id
+      if (!orderId) continue
+
+      await pool.query(`DELETE FROM order_items WHERE order_id=$1`, [orderId])
+      await pool.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
+         SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
+         FROM paused_order_items_archive
+         WHERE archive_id=$2
+         ON CONFLICT (order_id, product_id)
+         DO UPDATE SET
+           quantity = EXCLUDED.quantity,
+           price_at_order = EXCLUDED.price_at_order,
+           delivery_charge_at_order = EXCLUDED.delivery_charge_at_order,
+           order_type = EXCLUDED.order_type`,
+        [orderId, arch.archive_id]
+      )
+
+      await refreshOrderTotals(orderId)
+    }
+
+    await pool.query(
+      `DELETE FROM paused_order_items_archive
+       WHERE archive_id IN (
+         SELECT archive_id FROM paused_orders_archive
+         WHERE customer_id=$1 AND vendor_id=$2 AND order_date >= $3
+       )`,
+      [cId, vId, today]
+    )
+    await pool.query(
+      `DELETE FROM paused_orders_archive
+       WHERE customer_id=$1 AND vendor_id=$2 AND order_date >= $3`,
+      [cId, vId, today]
+    )
+    return restored
+  } catch (e) {
+    console.error("restorePausedOrders error:", e.message)
+    return { nextAdhocDate: null, adhocItems: [] }
+  }
+}
+
+async function buildResumeSummary(cId, vId, withProducts, restored = null) {
+  const addr = await getAddress(cId, vId)
+  const lines = []
+
+  if (withProducts) {
+    const prodSubs = await getCustomerProductSubs(cId, vId)
+    const activeProdSubs = prodSubs.filter((s) => s.is_active && parseFloat(s.quantity || 0) > 0)
+    if (activeProdSubs.length) {
+      lines.push("📦 *Daily Products:*")
+      activeProdSubs.forEach((s) => {
+        lines.push(`• ${s.name}${s.unit ? ` (${s.unit})` : ""} — ${s.quantity}/day`)
+      })
+    }
+  }
+
+  const adhocOrders = await getUpcomingAdhocOrders(cId, vId, restored)
+  adhocOrders.forEach((adhocOrder) => {
+    if (lines.length) lines.push("")
+    lines.push(`🛒 *Tomorrow Order (${displayDate(adhocOrder.orderDate)}):*`)
+    adhocOrder.items.forEach((item) => {
+      lines.push(`• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity}`)
+    })
+  })
+
+  if (addr) {
+    if (lines.length) lines.push("")
+    lines.push(`📍 ${formatAddress(addr)}`)
+  }
+
+  return lines.join("\n")
 }
 
 async function deletePause(pauseId) {
@@ -588,7 +807,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = []
     if (menuCtx.hasViewData) {
-      rows.push({ id: "view", title: "📋 View Subscription", description: "View subscription or order details" })
+      rows.push({ id: "view", title: "📋 View Orders & Plan", description: "View subscription and order details" })
     }
     if (withProducts) {
       rows.push(
@@ -615,7 +834,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
   } else if (sub.status === "active") {
     header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = [
-      { id: "view",        title: "📋 View Subscription", description: "View delivery details"       },
+      { id: "view",        title: "📋 View Orders & Plan", description: "View subscription and order details" },
       { id: "profile",     title: "👤 Profile",           description: "View or update your details" },
       { id: "pause",       title: "⏸ Pause Delivery",     description: "Skip delivery for some days" },
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"          },
@@ -630,7 +849,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = []
     if (menuCtx.hasViewData) {
-      rows.push({ id: "view", title: "📋 View Subscription", description: "View subscription or order details" })
+      rows.push({ id: "view", title: "📋 View Orders & Plan", description: "View subscription and order details" })
     }
     rows.push(
       { id: "profile",     title: "👤 Profile",           description: "View or update your details" },
@@ -974,8 +1193,8 @@ async function handleCustomerBot(msg, pid) {
         const subs = await getCustomerProductSubs(cId, vId)
         const activeProducts = subs.filter(s => s.is_active)
         if (activeProducts.length > 0) {
-          const lines = activeProducts.map(s => `• ${s.name}${s.unit ? ` (${s.unit})` : ""} × ${s.quantity}`).join("\n")
-          welcome = `👋 *Welcome back!*\n\n📦 Your daily order:\n${lines}\n📍 ${formatAddress(addr)}`
+          const summary = await buildResumeSummary(cId, vId, withProducts)
+          welcome = `👋 *Welcome back!*\n\n${summary || `📍 ${formatAddress(addr)}`}`
         } else {
           welcome = `👋 *Welcome to ${name}!*\n\nBrowse our products and subscribe to daily delivery. 🥛`
         }
@@ -1066,7 +1285,7 @@ async function handleCustomerBot(msg, pid) {
         return
       }
 
-      let text = `📋 *Your Subscription*\n\n`
+      let text = `📋 *Your Orders & Plan*\n\n`
 
       if (withProducts) {
         if (activeProdSubs.length > 0) {
@@ -1094,41 +1313,19 @@ async function handleCustomerBot(msg, pid) {
         text += `\nℹ️ *No daily subscription active*`
       }
 
-      const { rows: latestOrderRows } = await pool.query(`
-        SELECT o.order_date, o.delivery_charge_amount
-        FROM order_items oi
-        JOIN orders o ON o.order_id = oi.order_id
-        WHERE o.customer_id=$1 AND o.vendor_id=$2 AND oi.order_type='adhoc'
-        ORDER BY o.order_date DESC
-        LIMIT 1
-      `, [cId, vId])
-
-      const latestAdhocDate = latestOrderRows[0]?.order_date || null
-      const latestAdhocDelivery = parseFloat(latestOrderRows[0]?.delivery_charge_amount || 0)
-      let qItems = []
-      if (latestAdhocDate) {
-        const adhocItemsRes = await pool.query(`
-          SELECT oi.quantity, p.name, p.unit, oi.price_at_order, oi.delivery_charge_at_order
-          FROM order_items oi
-          JOIN orders o ON o.order_id = oi.order_id
-          JOIN products p ON p.product_id = oi.product_id
-          WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date=$3 AND oi.order_type='adhoc'
-        `, [cId, vId, latestAdhocDate])
-        qItems = adhocItemsRes.rows
-      }
-
-      if (qItems.length > 0) {
-        text += `\n\n🛒 *Tomorrow Order for ${displayDate(latestAdhocDate)}:*\n`
-        qItems.forEach(item => {
+      const adhocOrders = await getUpcomingAdhocOrders(cId, vId)
+      adhocOrders.forEach((adhocOrder) => {
+        text += `\n\n🛒 *Tomorrow Order for ${displayDate(adhocOrder.orderDate)}:*\n`
+        adhocOrder.items.forEach(item => {
           const qty = parseFloat(item.quantity || 0)
           const price = parseFloat(item.price_at_order || 0)
           const cost = (qty * price).toFixed(0)
           text += `• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
         })
-        text += latestAdhocDelivery > 0
-          ? `🚚 Delivery Charge — ₹${latestAdhocDelivery.toFixed(2)}\n`
+        text += adhocOrder.deliveryCharge > 0
+          ? `🚚 Delivery Charge — ₹${adhocOrder.deliveryCharge.toFixed(2)}\n`
           : `🚚 Delivery — Free\n`
-      }
+      })
 
       await sendText(pid, phone, text)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -1178,9 +1375,14 @@ async function handleCustomerBot(msg, pid) {
     // Resume from pause (customer has active pause)
     if (input === "resume_pause") {
       if (pause) await deletePause(pause.pause_id)
-      const addr = await getAddress(cId, vId)
-      const qty  = sub?.quantity || 1
-      await sendText(pid, phone, `▶️ *Delivery Resumed!*\n\n🥛 *${qty} packet${qty > 1 ? "s" : ""}*/day starting tomorrow\n📍 ${formatAddress(addr)}\n\nSee you tomorrow! 🎉`)
+      const restored = await restorePausedOrders(cId, vId)
+      await generateOrdersForVendor(vId)
+      const resumeSummary = await buildResumeSummary(cId, vId, withProducts, restored)
+      await sendText(
+        pid,
+        phone,
+        `▶️ *Delivery Resumed!*\n\n${resumeSummary || "Your daily delivery has been restored from tomorrow."}\n\nSee you tomorrow! 🎉`
+      )
       const s = await getSubscription(cId, vId)
       await setState(phone, "menu", vId)
       await sendMainMenu(pid, phone, s, profile, null, withProducts)
