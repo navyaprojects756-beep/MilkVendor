@@ -74,8 +74,8 @@ async function handleVendorBot(msg, phoneNumberId) {
     const adminToken    = generateVendorToken(vendor.vendor_id, "admin")
     const deliveryToken = generateVendorToken(vendor.vendor_id, "delivery")
     const t             = Date.now()
-    const adminLink    = `${process.env.APP_BASE_URL}?token=${adminToken}&t=${t}`
-    const deliveryLink = `${process.env.APP_BASE_URL}?token=${deliveryToken}&t=${t}`
+    const adminLink    = `${process.env.APP_BASE_URL}dashboard?token=${adminToken}&t=${t}`
+    const deliveryLink = `${process.env.APP_BASE_URL}dashboard?token=${deliveryToken}&t=${t}`
 
     await sendText(
       phoneNumberId,
