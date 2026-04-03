@@ -1180,8 +1180,8 @@ router.get("/pauses", requireAdmin, async (req, res) => {
       SELECT
         sp.pause_id,
         sp.customer_id,
-        sp.pause_from,
-        sp.pause_until,
+        sp.pause_from::text AS pause_from,
+        sp.pause_until::text AS pause_until,
         sp.created_at,
         c.phone,
         cv.address_type,

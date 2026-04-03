@@ -272,7 +272,7 @@ async function getUpcomingAdhocOrders(cId, vId, restored = null) {
      JOIN products p ON p.product_id = oi.product_id
      WHERE o.customer_id=$1
        AND o.vendor_id=$2
-       AND o.is_delivered=false
+       AND COALESCE(o.is_delivered, false)=false
        AND o.order_date >= $3
        AND oi.order_type='adhoc'
      ORDER BY o.order_date ASC, p.sort_order, p.product_id`,
@@ -325,6 +325,58 @@ async function getUpcomingAdhocOrders(cId, vId, restored = null) {
   }
 
   return []
+}
+
+async function getUpcomingOrderSections(cId, vId) {
+  const today = getISTDateStr(0)
+  const res = await pool.query(
+    `SELECT
+       o.order_date,
+       COALESCE(o.delivery_charge_amount, 0) AS delivery_charge_amount,
+       COALESCE(oi.order_type, 'subscription') AS order_type,
+       oi.quantity,
+       oi.price_at_order,
+       oi.delivery_charge_at_order,
+       oi.product_id,
+       p.name,
+       p.unit,
+       p.sort_order
+     FROM orders o
+     JOIN order_items oi ON oi.order_id = o.order_id
+     LEFT JOIN products p ON p.product_id = oi.product_id
+     WHERE o.customer_id=$1
+       AND o.vendor_id=$2
+       AND COALESCE(o.is_delivered, false)=false
+       AND o.order_date >= $3
+     ORDER BY o.order_date ASC, CASE WHEN COALESCE(oi.order_type, 'subscription')='subscription' THEN 0 ELSE 1 END, p.sort_order, oi.product_id`,
+    [cId, vId, today]
+  )
+
+  const sections = []
+  let current = null
+  for (const row of res.rows) {
+    if (!current || String(current.orderDate) !== String(row.order_date)) {
+      current = {
+        orderDate: row.order_date,
+        deliveryCharge: parseFloat(row.delivery_charge_amount || 0),
+        dailyItems: [],
+        adhocItems: [],
+      }
+      sections.push(current)
+    }
+
+    const item = {
+      quantity: row.quantity,
+      price_at_order: row.price_at_order,
+      name: row.name || `Product #${row.product_id}`,
+      unit: row.unit || "",
+    }
+
+    if ((row.order_type || "subscription") === "adhoc") current.adhocItems.push(item)
+    else current.dailyItems.push(item)
+  }
+
+  return sections
 }
 
 async function saveInboundMessage(vendorId, customerId, phone, type, content, mediaId) {
@@ -606,7 +658,7 @@ async function removePausedOrders(cId, vId, from, until = null) {
        FROM orders o
        WHERE o.customer_id=$1
          AND o.vendor_id=$2
-         AND o.is_delivered=false
+         AND COALESCE(o.is_delivered, false)=false
          AND o.order_date >= $3
          AND ($4::date IS NULL OR o.order_date <= $4::date)`,
       [cId, vId, from, until]
@@ -688,7 +740,7 @@ async function restorePausedOrders(cId, vId) {
            quantity = EXCLUDED.quantity,
            delivery_charge_amount = EXCLUDED.delivery_charge_amount,
            payment_status = EXCLUDED.payment_status
-         WHERE orders.is_delivered = false
+         WHERE COALESCE(orders.is_delivered, false) = false
          RETURNING order_id`,
         [cId, vId, arch.order_date, arch.quantity, arch.delivery_charge_amount, arch.payment_status]
       )
@@ -1313,17 +1365,23 @@ async function handleCustomerBot(msg, pid) {
         text += `\nℹ️ *No daily subscription active*`
       }
 
-      const adhocOrders = await getUpcomingAdhocOrders(cId, vId)
-      adhocOrders.forEach((adhocOrder) => {
-        text += `\n\n🛒 *Tomorrow Order for ${displayDate(adhocOrder.orderDate)}:*\n`
-        adhocOrder.items.forEach(item => {
+      const upcomingOrders = await getUpcomingOrderSections(cId, vId)
+      upcomingOrders.forEach((order) => {
+        text += `\n\n📅 *Upcoming Order for ${displayDate(order.orderDate)}:*\n`
+        order.dailyItems.forEach(item => {
           const qty = parseFloat(item.quantity || 0)
           const price = parseFloat(item.price_at_order || 0)
           const cost = (qty * price).toFixed(0)
-          text += `• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
+          text += `• [Daily] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
         })
-        text += adhocOrder.deliveryCharge > 0
-          ? `🚚 Delivery Charge — ₹${adhocOrder.deliveryCharge.toFixed(2)}\n`
+        order.adhocItems.forEach(item => {
+          const qty = parseFloat(item.quantity || 0)
+          const price = parseFloat(item.price_at_order || 0)
+          const cost = (qty * price).toFixed(0)
+          text += `• [Extra] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
+        })
+        text += order.deliveryCharge > 0
+          ? `🚚 Delivery Charge — ₹${order.deliveryCharge.toFixed(2)}\n`
           : `🚚 Delivery — Free\n`
       })
 
@@ -2211,7 +2269,11 @@ async function handleCustomerBot(msg, pid) {
         INSERT INTO order_items (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
         VALUES ($1,$2,$3,$4,$5,'adhoc')
         ON CONFLICT (order_id, product_id)
-        DO UPDATE SET quantity = order_items.quantity + EXCLUDED.quantity
+        DO UPDATE SET
+          quantity = order_items.quantity + EXCLUDED.quantity,
+          price_at_order = EXCLUDED.price_at_order,
+          delivery_charge_at_order = EXCLUDED.delivery_charge_at_order,
+          order_type = 'adhoc'
       `, [orderId, item.product_id, item.qty, item.price, 0])
     }
 
