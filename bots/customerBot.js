@@ -162,6 +162,11 @@ function formatAddress(addr) {
   return addr.manual_address || "Not set"
 }
 
+function formatDeliveryWindow(profile = {}) {
+  if (!profile?.delivery_start || !profile?.delivery_end) return ""
+  return `\n🕒 Delivery Time: ${String(profile.delivery_start).slice(0, 5)} to ${String(profile.delivery_end).slice(0, 5)}`
+}
+
 function isOrderWindowOpen(settings) {
   if (!settings.order_window_enabled) return true
   const now = getISTNow()
@@ -525,6 +530,23 @@ async function savePause(cId, vId, from, until) {
   )
 }
 
+async function removePausedOrders(cId, vId, from, until = null) {
+  const orderIdsRes = await pool.query(
+    `SELECT order_id
+     FROM orders
+     WHERE customer_id=$1
+       AND vendor_id=$2
+       AND is_delivered=false
+       AND order_date >= $3
+       AND ($4::date IS NULL OR order_date <= $4::date)`,
+    [cId, vId, from, until]
+  )
+  const orderIds = orderIdsRes.rows.map((r) => r.order_id)
+  if (!orderIds.length) return
+  await pool.query(`DELETE FROM order_items WHERE order_id = ANY($1::int[])`, [orderIds])
+  await pool.query(`DELETE FROM orders WHERE order_id = ANY($1::int[])`, [orderIds])
+}
+
 async function deletePause(pauseId) {
   await pool.query("DELETE FROM subscription_pauses WHERE pause_id=$1", [pauseId])
 }
@@ -581,19 +603,15 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       )
     }
   } else if (sub.status === "active" && pause) {
-    const until = pause.pause_until
-      ? `until *${displayDate(pause.pause_until)}*`
-      : `— resumes when you're ready`
-    header = showPrompt ? `🥛 *${name}*\n\n⏸ Delivery paused ${until}` : `🥛 *${name}*\n\n⏸ Paused ${until}`
+    const details = pause.pause_until
+      ? `⏸ Delivery paused from *${displayDate(pause.pause_from)}* to *${displayDate(pause.pause_until)}*.\n\nAll deliveries in this period, including daily subscription and tomorrow orders, are paused.`
+      : `⏸ Delivery paused from *${displayDate(pause.pause_from)}* until you resume.\n\nAll deliveries from this date onward, including daily subscription and tomorrow orders, are paused.`
+    header = `🥛 *${name}*\n\n${details}`
     rows = [
-      { id: "view",         title: "📋 View Subscription", description: "View delivery details"         },
       { id: "resume_pause", title: "▶️ Resume Now",         description: "End pause & restart delivery"  },
       { id: "profile",      title: "👤 Profile",            description: "View or update your details"   },
       { id: "get_invoice",  title: "🧾 Get Bill",           description: "Download your bill"            },
     ]
-    if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Products", description: "Update your daily delivery products" })
-    }
   } else if (sub.status === "active") {
     header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
     rows = [
@@ -864,10 +882,11 @@ async function handleCustomerBot(msg, pid) {
         const delLine = delCharge > 0
           ? `\n🚚 *Delivery Charge:* ₹${delCharge.toFixed(2)}`
           : `\n🚚 *Delivery:* Free`
+        const timingLine = formatDeliveryWindow(profile)
 
         const tom = istTomorrowStr()
         await sendButtons(pid, phone,
-          `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n📅 Delivery: ${displayDate(tom)}\n\nConfirm your order?`,
+          `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n📅 Delivery: ${displayDate(tom)}${timingLine}\n\nConfirm your order?`,
           [
             { id: "flow_confirm_order", title: "✅ Confirm Order" },
             { id: "flow_cancel_order",  title: "❌ Cancel"        },
@@ -978,19 +997,6 @@ async function handleCustomerBot(msg, pid) {
 
     await setState(phone, "menu", vId)
     await sendMainMenu(pid, phone, sub, profile, pause, withProducts, true)
-    return
-  }
-
-  /* ── Block all actions outside order window ── */
-
-  if (!isOrderWindowOpen(settings)) {
-    const s = settings.order_accept_start || "—"
-    const e = settings.order_accept_end   || "—"
-    // Save message to inbox so vendor can see it
-    if (input) await saveInboundMessage(vId, cId, phone, "text", input, null)
-    await sendText(pid, phone,
-      `⏰ *We are not accepting messages right now.*\n\nOur order window is open from *${s}* to *${e}*.\n\nPlease message us during those hours and we'll be happy to help! 🙏`
-    )
     return
   }
 
@@ -1204,6 +1210,7 @@ async function handleCustomerBot(msg, pid) {
         ? `👋 We received your message.\n\nFor immediate help, please call:\n📞 *${vendorPhone}*`
         : `👋 We received your message and will get back to you if needed.`
     )
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
     return
   }
 
@@ -1269,15 +1276,9 @@ async function handleCustomerBot(msg, pid) {
       const days      = parseInt(dayMatch[1])
       const from      = dateToStr(tomorrow)
       const until     = dateToStr(addDays(tomorrow, days - 1))
-      const resumeDay = displayDate(dateToStr(addDays(tomorrow, days)))
       const label     = days === 7 ? "1 Week" : days === 14 ? "2 Weeks" : days === 30 ? "1 Month" : `${days} Day${days > 1 ? "s" : ""}`
       await savePause(cId, vId, from, until)
-      await sendText(pid, phone,
-        `⏸ *Delivery Paused for ${label}!*\n\n` +
-        `🗒 From: ${displayDate(from)}\n` +
-        `🗒 To: ${displayDate(until)}\n\n` +
-        `Delivery will resume automatically on *${resumeDay}*. 🥛`
-      )
+      await removePausedOrders(cId, vId, from, until)
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
@@ -1288,9 +1289,7 @@ async function handleCustomerBot(msg, pid) {
     if (input === "pause_now") {
       const from = dateToStr(tomorrow)
       await savePause(cId, vId, from, null)
-      await sendText(pid, phone,
-        `⏸ *Delivery Paused!*\n\n🗒 Starting: ${displayDate(from)}\n\nWe'll wait for you. 🥛`
-      )
+      await removePausedOrders(cId, vId, from, null)
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
@@ -1666,12 +1665,13 @@ async function handleCustomerBot(msg, pid) {
         `📦 ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
       ).join("\n")
       const delLine = delCharge > 0 ? `\n🚚 Delivery: ₹${delCharge.toFixed(2)}` : `\n🚚 Delivery: Free`
+      const timingLine = formatDeliveryWindow(profile)
 
       await sendText(pid, phone,
         `✅ *Order Placed!*\n\n${itemLines}${delLine}\n\n` +
         `🧾 Total: ₹${grandTotal.toFixed(2)}\n` +
         `📍 ${formatAddress(addr)}\n` +
-        `📅 Delivery: ${displayDate(tomorrow)}\n\nThank you! 🙏`
+        `📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! 🙏`
       )
 
       const sub   = await getSubscription(cId, vId)
@@ -1692,8 +1692,11 @@ async function handleCustomerBot(msg, pid) {
       ? `\n🚚 *Delivery Charge:* ₹${delCharge.toFixed(2)}`
       : `\n🚚 *Delivery:* Free`
 
+    const timingLine = formatDeliveryWindow(profile)
+    const tomorrow = getISTDateStr(1)
+
     await sendButtons(pid, phone,
-      `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n\nConfirm your order?`,
+      `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
       [
         { id: "flow_confirm_order", title: "✅ Confirm Order" },
         { id: "flow_cancel_order",  title: "❌ Cancel"        },
@@ -1836,9 +1839,11 @@ async function handleCustomerBot(msg, pid) {
       ).join("\n")
       const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + deliveryCharge).toFixed(2)
       const deliveryLine = deliveryCharge > 0 ? `\n🚚 Delivery: ₹${deliveryCharge.toFixed(2)}` : `\n🚚 Delivery: Free`
+      const timingLine = formatDeliveryWindow(profile)
+      const tomorrow = getISTDateStr(1)
 
       await sendButtons(pid, phone,
-        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: tomorrow\n\nConfirm your order?`,
+        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
         [
           { id: "adhoc_confirm", title: "✅ Confirm Order" },
           { id: "adhoc_more",    title: "➕ Add More"      },
@@ -1933,9 +1938,11 @@ async function handleCustomerBot(msg, pid) {
       ).join("\n")
       const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + deliveryCharge).toFixed(2)
       const deliveryLine = deliveryCharge > 0 ? `\n🚚 Delivery: ₹${deliveryCharge.toFixed(2)}` : `\n🚚 Delivery: Free`
+      const timingLine = formatDeliveryWindow(profile)
+      const tomorrow = getISTDateStr(1)
 
       await sendButtons(pid, phone,
-        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: tomorrow\n\nConfirm your order?`,
+        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
         [
           { id: "adhoc_confirm", title: "✅ Confirm Order" },
           { id: "adhoc_more",    title: "➕ Add More"      },
@@ -2019,12 +2026,13 @@ async function handleCustomerBot(msg, pid) {
       `📦 ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
     ).join("\n")
     const deliveryLine = orderDelivery > 0 ? `\n🚚 Delivery: ₹${orderDelivery.toFixed(2)}` : `\n🚚 Delivery: Free`
+    const timingLine = formatDeliveryWindow(profile)
 
     await sendText(pid, phone,
       `✅ *Order Placed!*\n\n${itemLines}${deliveryLine}\n\n` +
       `🧾 Total: ₹${grandTotal}\n` +
       `📍 ${formatAddress(addr)}\n` +
-      `📅 Delivery: tomorrow\n\nThank you! 🙏`
+      `📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! 🙏`
     )
 
     const sub   = await getSubscription(cId, vId)

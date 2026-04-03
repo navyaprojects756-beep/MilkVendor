@@ -170,6 +170,16 @@ router.get("/orders", async (req, res) => {
       LEFT JOIN order_items oi ON oi.order_id = o.order_id
       LEFT JOIN products p ON p.product_id = oi.product_id
       WHERE o.vendor_id = $1
+        AND (
+          o.is_delivered = true OR NOT EXISTS (
+            SELECT 1
+            FROM subscription_pauses sp
+            WHERE sp.customer_id = o.customer_id
+              AND sp.vendor_id = o.vendor_id
+              AND o.order_date >= sp.pause_from
+              AND (sp.pause_until IS NULL OR o.order_date <= sp.pause_until)
+          )
+        )
       GROUP BY o.order_id, o.is_delivered, o.delivered_at, c.phone,
                cv.address_type, a.name, a.address, b.block_name, cv.flat_number,
                cv.manual_address, o.quantity, o.order_date
