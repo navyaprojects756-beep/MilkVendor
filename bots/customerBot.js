@@ -72,9 +72,8 @@ async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessN
           flow_message_version: "3",
           flow_token:           `${vendorId}:${customerId}:update`,
           flow_id:              process.env.REGISTRATION_FLOW_ID,
-          flow_cta:             "Update Address",
-          flow_action:          "navigate",
-          flow_action_payload:  { screen: "WELCOME" }
+          flow_cta:             "Open Profile",
+          flow_action:          "data_exchange"
         }
       }
     }
@@ -505,11 +504,11 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       ? [
           { id: "manage_products", title: "📦 Browse Products", description: "Choose products for daily delivery" },
           { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order items for tomorrow only" },
-          { id: "profile",         title: "📍 Update Address",  description: "Change delivery location" },
+          { id: "profile",         title: "👤 Profile",          description: "View or update your details" },
         ]
       : [
           { id: "subscribe", title: "🥛 Subscribe Now", description: "Start daily milk delivery" },
-          { id: "profile",   title: "📍 Update Address", description: "Change delivery location" },
+          { id: "profile",   title: "👤 Profile",       description: "View or update your details" },
         ]
   } else if (sub.status === "active" && pause) {
     const until = pause.pause_until
@@ -519,7 +518,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     rows = [
       { id: "view",         title: "📋 View Subscription", description: "View delivery details"         },
       { id: "resume_pause", title: "▶️ Resume Now",         description: "End pause & restart delivery"  },
-      { id: "profile",      title: "📍 Update Address",     description: "Change delivery location"      },
+      { id: "profile",      title: "👤 Profile",            description: "View or update your details"   },
       { id: "get_invoice",  title: "🧾 Get Bill",           description: "Download your bill"            },
     ]
     if (withProducts) {
@@ -529,7 +528,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
       { id: "view",        title: "📋 View Subscription", description: "View delivery details"       },
-      { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"    },
+      { id: "profile",     title: "👤 Profile",           description: "View or update your details" },
       { id: "pause",       title: "⏸ Pause Delivery",     description: "Skip delivery for some days" },
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"          },
     ]
@@ -542,7 +541,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
   } else {
     header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
-      { id: "profile",     title: "📍 Update Address",    description: "Change delivery location" },
+      { id: "profile",     title: "👤 Profile",           description: "View or update your details" },
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"       },
     ]
     if (withProducts) {
@@ -657,8 +656,8 @@ async function sendBlockMenu(pid, phone, aptId) {
 
 async function startAddressFlow(pid, phone, customerId, vendor, afterAddr = false, existingAddr = null) {
   const bizName = (vendor.business_name || "MilkRoute").trim()
-  if (existingAddr) {
-    await sendAddressUpdateFlow(pid, phone, vendor.vendor_id, customerId, bizName, formatAddress(existingAddr))
+  if (existingAddr || (!afterAddr && customerId)) {
+    await sendAddressUpdateFlow(pid, phone, vendor.vendor_id, customerId, bizName, existingAddr ? formatAddress(existingAddr) : null)
   } else {
     await sendRegistrationFlow(pid, phone, vendor.vendor_id, bizName)
   }
@@ -1030,7 +1029,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Update address
+    // Profile
     if (input === "profile") {
       const addr = await getAddress(cId, vId)
       await startAddressFlow(pid, phone, cId, vendor, false, addr || null)
