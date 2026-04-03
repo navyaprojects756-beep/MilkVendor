@@ -570,6 +570,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
       auto_generate_time,
       price_per_unit,
       show_phone_numbers,
+      adhoc_delivery_charge,
     } = req.body
 
     await pool.query(`
@@ -579,8 +580,9 @@ router.post("/settings", requireAdmin, async (req, res) => {
         order_window_enabled, auto_generate_orders,
         notify_on_delivery, notify_pending_eod,
         max_quantity_per_order, is_active,
-        auto_generate_time, price_per_unit, show_phone_numbers, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, NOW())
+        auto_generate_time, price_per_unit, show_phone_numbers,
+        adhoc_delivery_charge, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW())
       ON CONFLICT (vendor_id) DO UPDATE SET
         allow_apartments       = COALESCE($2,  vendor_settings.allow_apartments),
         allow_houses           = COALESCE($3,  vendor_settings.allow_houses),
@@ -596,6 +598,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
         auto_generate_time     = COALESCE($13, vendor_settings.auto_generate_time),
         price_per_unit         = COALESCE($14, vendor_settings.price_per_unit),
         show_phone_numbers     = COALESCE($15, vendor_settings.show_phone_numbers),
+        adhoc_delivery_charge  = COALESCE($16, vendor_settings.adhoc_delivery_charge),
         updated_at             = NOW()
     `, [
       vendorId,
@@ -605,8 +608,9 @@ router.post("/settings", requireAdmin, async (req, res) => {
       notify_on_delivery, notify_pending_eod,
       max_quantity_per_order, is_active,
       auto_generate_time || null,
-      price_per_unit != null ? parseFloat(price_per_unit) : null,
-      show_phone_numbers != null ? Boolean(show_phone_numbers) : null,
+      price_per_unit        != null ? parseFloat(price_per_unit)        : null,
+      show_phone_numbers    != null ? Boolean(show_phone_numbers)        : null,
+      adhoc_delivery_charge != null ? parseFloat(adhoc_delivery_charge) : null,
     ])
 
     res.json({ message: "Settings saved" })

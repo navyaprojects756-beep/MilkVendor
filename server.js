@@ -17,14 +17,16 @@ app.use('/uploads', express.static(path.join(__dirname, 'public/uploads'), {
 
 
 // Bots
-const handleCustomerBot = require("./bots/customerBot")
-const handleVendorBot = require("./bots/vendorBot")
-const vendorDashboard = require("./routes/vendorDashboard")
+const handleCustomerBot      = require("./bots/customerBot")
+const handleVendorBot        = require("./bots/vendorBot")
+const vendorDashboard        = require("./routes/vendorDashboard")
+const customerFlowExchange   = require("./routes/customerFlowExchange")
 
 /* ---------------- MIDDLEWARE ---------------- */
 
 // WhatsApp Flow data exchange needs raw body for decryption
 app.use("/vendor/whatsapp-flow-data", express.raw({ type: "*/*" }))
+app.use("/customer-flow-exchange",    express.raw({ type: "*/*" }))
 
 app.use(express.json({ limit: "10mb" }))
 app.use(express.static("public", {
@@ -43,6 +45,7 @@ app.use("/vendor", (req, res, next) => {
   next()
 })
 app.use("/vendor", vendorDashboard)
+app.use("/customer-flow-exchange", customerFlowExchange)
 
 /* ---------------- CONFIG ---------------- */
 

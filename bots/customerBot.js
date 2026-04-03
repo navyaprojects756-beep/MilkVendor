@@ -2,7 +2,7 @@ const axios = require("axios")
 const path  = require("path")
 const fs    = require("fs")
 const pool  = require("../db")
-const { generateInvoicePDF } = require("../services/invoicePDF")
+const { generateInvoicePDF }     = require("../services/invoicePDF")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
@@ -16,7 +16,7 @@ async function sendWhatsApp(pid, payload) {
       { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" } }
     )
   } catch (err) {
-    console.log("WhatsApp Error:", err.response?.data || err.message)
+    console.error("WhatsApp Error:", JSON.stringify(err.response?.data || err.message, null, 2))
   }
 }
 
@@ -30,7 +30,56 @@ async function sendText(pid, phone, text) {
 }
 
 // ── Send the registration flow template to a new user ──
-const REGISTRATION_TEMPLATE_NAME = "customer_registration_v2"
+const REGISTRATION_TEMPLATE_NAME  = "customer_registration_v2"
+const PRODUCT_LIST_FLOW_ID        = process.env.PRODUCT_LIST_FLOW_ID
+
+// ── Send Product List flow as free interactive message (within 24h session) ──
+async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, mode = "sub") {
+  await sendWhatsApp(pid, {
+    messaging_product: "whatsapp",
+    to:   phone,
+    type: "interactive",
+    interactive: {
+      type: "flow",
+      body: { text: bodyText || "📦 *Your Daily Products*\n\nSet your daily quantity for each product below." },
+      action: {
+        name: "flow",
+        parameters: {
+          flow_message_version: "3",
+          flow_token:           `${vendorId}:${customerId}:${mode}`,
+          flow_id:              PRODUCT_LIST_FLOW_ID,
+          flow_cta:             mode === "adhoc" ? "Place Order" : "Manage Products",
+          flow_action:          "data_exchange"
+        }
+      }
+    }
+  })
+}
+
+// ── Send address update as free interactive message (within session, not template) ──
+async function sendAddressUpdateFlow(pid, phone, vendorId, businessName, currentAddr) {
+  const addrLine = currentAddr ? `📍 *Current:* ${currentAddr}\n\n` : ""
+  await sendWhatsApp(pid, {
+    messaging_product: "whatsapp",
+    to:   phone,
+    type: "interactive",
+    interactive: {
+      type: "flow",
+      body: { text: `${addrLine}Please update your delivery address below.` },
+      action: {
+        name: "flow",
+        parameters: {
+          flow_message_version: "3",
+          flow_token:           String(vendorId),
+          flow_id:              process.env.REGISTRATION_FLOW_ID,
+          flow_cta:             "Update Address",
+          flow_action:          "navigate",
+          flow_action_payload:  { screen: "WELCOME" }
+        }
+      }
+    }
+  })
+}
 
 async function sendRegistrationFlow(pid, phone, vendorId, businessName) {
   await sendWhatsApp(pid, {
@@ -124,6 +173,17 @@ function isOrderWindowOpen(settings) {
 }
 
 /* ─── DATE HELPERS ─────────────────────────────────────── */
+
+function getISTNow() {
+  const now = new Date()
+  return new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
+}
+
+function istTomorrowStr() {
+  const ist = getISTNow()
+  const tom = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate() + 1)
+  return `${tom.getFullYear()}-${String(tom.getMonth() + 1).padStart(2, "0")}-${String(tom.getDate()).padStart(2, "0")}`
+}
 
 function addDays(date, n) {
   const d = new Date(date)
@@ -450,25 +510,25 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       : `— resumes when you're ready`
     header = `🥛 *${name}*\n\n⏸ Delivery paused ${until}`
     rows = [
-      { id: "view",         title: "📋 My Subscription",  description: "View delivery details"         },
-      { id: "resume_pause", title: "▶️ Resume Now",        description: "End pause & restart delivery"  },
-      { id: "profile",      title: "📍 Update Address",    description: "Change delivery location"      },
-      { id: "get_invoice",  title: "🧾 Get Bill",          description: "Download your bill"            },
+      { id: "view",         title: "📋 View Subscription", description: "View delivery details"         },
+      { id: "resume_pause", title: "▶️ Resume Now",         description: "End pause & restart delivery"  },
+      { id: "profile",      title: "📍 Update Address",     description: "Change delivery location"      },
+      { id: "get_invoice",  title: "🧾 Get Bill",           description: "Download your bill"            },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 My Products",  description: "Manage daily subscriptions" })
+      rows.splice(1, 0, { id: "manage_products", title: "📦 Manage Products", description: "Manage subscription products" })
     }
   } else if (sub.status === "active") {
     header = `🥛 *${name}*\n\nHow can we help you today?`
     rows = [
-      { id: "view",        title: "📋 My Subscription",  description: "View delivery details"       },
+      { id: "view",        title: "📋 View Subscription", description: "View delivery details"       },
       { id: "profile",     title: "📍 Update Address",    description: "Change delivery location"    },
       { id: "pause",       title: "⏸ Pause Delivery",     description: "Skip delivery for some days" },
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"          },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 My Products",  description: "Manage daily subscriptions" })
-      rows.splice(2, 0, { id: "adhoc_order",     title: "🛒 Quick Order",  description: "Order extra items for tomorrow" })
+      rows.splice(1, 0, { id: "manage_products", title: "📦 Manage Products", description: "Manage subscription products" })
+      rows.splice(2, 0, { id: "adhoc_order",     title: "🛒 Quick Order",     description: "Order extra items for tomorrow" })
     } else {
       rows.splice(1, 0, { id: "change", title: "✏️ Change Quantity", description: "Update daily packets" })
     }
@@ -479,7 +539,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"       },
     ]
     if (withProducts) {
-      rows.unshift({ id: "manage_products", title: "📦 Restart Delivery", description: "Choose products and subscribe again" })
+      rows.unshift({ id: "manage_products", title: "📦 Manage Products", description: "Choose products and subscribe again" })
     } else {
       rows.unshift(
         { id: "resume",  title: "▶️ Resume Delivery",  description: `Continue with ${sub.quantity} packet/day` },
@@ -588,34 +648,14 @@ async function sendBlockMenu(pid, phone, aptId) {
 
 /* ─── ADDRESS FLOW ─────────────────────────────────────── */
 
-async function startAddressFlow(pid, phone, vendor, settings, afterAddr = false) {
-  const temp = { after_addr: afterAddr }
-  const allowApt   = settings.allow_apartments !== false
-  const allowHouse = settings.allow_houses !== false
-
-  if (allowApt && allowHouse) {
-    await sendList(pid, phone,
-      "📍 *Where should we deliver?*\n\nSelect your address type:",
-      nav([
-        { id: "apt",   title: "🏢 Apartment / Society", description: "Flat in a gated community" },
-        { id: "house", title: "🏠 Independent House",   description: "Individual house or villa"  }
-      ]),
-      "Select"
-    )
-    await setState(phone, "addr_type", vendor.vendor_id, temp)
-  } else if (allowApt) {
-    const ok = await sendApartmentMenu(pid, phone, vendor.vendor_id)
-    if (ok) await setState(phone, "apt", vendor.vendor_id, temp)
-    else {
-      await sendText(pid, phone, "⚠️ No apartments are registered yet. Please contact support.")
-      await setState(phone, "menu", vendor.vendor_id)
-    }
-  } else if (allowHouse) {
-    await sendText(pid, phone, "🏠 *Enter Your Delivery Address*\n\nPlease type your full house address:")
-    await setState(phone, "manual", vendor.vendor_id, temp)
+async function startAddressFlow(pid, phone, vendor, afterAddr = false, existingAddr = null) {
+  const bizName = (vendor.business_name || "MilkRoute").trim()
+  if (existingAddr) {
+    await sendAddressUpdateFlow(pid, phone, vendor.vendor_id, bizName, formatAddress(existingAddr))
   } else {
-    await sendText(pid, phone, "⚠️ Address registration is currently unavailable. Please contact support.")
+    await sendRegistrationFlow(pid, phone, vendor.vendor_id, bizName)
   }
+  await setState(phone, "awaiting_registration", vendor.vendor_id, { after_addr: afterAddr })
 }
 
 async function confirmQty(pid, phone, cId, vId, qty, price, profile, withProducts = false) {
@@ -686,9 +726,71 @@ async function handleCustomerBot(msg, pid) {
   const isFlowReply = msg.type === "interactive" && msg.interactive?.type === "nfm_reply"
   if (isFlowReply) {
     const formData = JSON.parse(msg.interactive.nfm_reply.response_json || "{}")
-    const name     = formData.customer_name || ""
+    console.log("📦 Product flow nfm_reply formData:", JSON.stringify(formData))
 
-    // Save name to customers table
+    // Product List flow: state is manage_products or adhoc_product
+    const isProductListFlow = state?.state === "manage_products" || state?.state === "adhoc_product"
+
+    if (isProductListFlow) {
+      const isAdhoc = state?.state === "adhoc_product"
+
+      if (isAdhoc) {
+        // ── Adhoc: cart was saved by flow endpoint — show confirmation ──
+        const freshState = await getState(phone)
+        const cart       = freshState?.temp_data?.flow_cart || []
+        const delCharge  = parseFloat(freshState?.temp_data?.flow_delivery_charge || 0)
+
+        if (cart.length === 0) {
+          // Nothing entered in the flow
+          await sendText(pid, phone, "⚠️ No items selected. Please enter a quantity for at least one product.")
+          const sub   = await getSubscription(cId, vId)
+          const pause = await getActivePause(cId, vId)
+          await setState(phone, "menu", vId)
+          await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+          return
+        }
+
+        const itemTotal  = cart.reduce((s, item) => s + item.price * item.qty, 0)
+        const grandTotal = itemTotal + delCharge
+        const lines      = cart.map(item => {
+          const cost = (item.price * item.qty).toFixed(2)
+          return `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — ₹${cost}`
+        }).join("\n")
+        const delLine = delCharge > 0
+          ? `\n🚚 *Delivery Charge:* ₹${delCharge.toFixed(2)}`
+          : `\n🚚 *Delivery:* Free`
+
+        const tom = istTomorrowStr()
+        await sendButtons(pid, phone,
+          `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n📅 Delivery: ${displayDate(tom)}\n\nConfirm your order?`,
+          [
+            { id: "flow_confirm_order", title: "✅ Confirm Order" },
+            { id: "flow_cancel_order",  title: "❌ Cancel"        },
+          ]
+        )
+        await setState(phone, "flow_adhoc_confirm", vId, {
+          flow_cart:             cart,
+          flow_delivery_charge:  delCharge,
+        })
+        return
+      }
+
+      // ── Subscription: was already saved by flow endpoint ──
+      const freshState = await getState(phone)
+      const subSaved   = freshState?.temp_data?.flow_sub_saved
+      const sub        = await getSubscription(cId, vId)
+      const pause      = await getActivePause(cId, vId)
+      const confirmMsg = subSaved
+        ? `✅ *Products updated!*\n\nYour daily subscriptions have been saved. 🎉`
+        : `✅ *No changes detected.*\n\nYour subscriptions remain the same.`
+      await sendText(pid, phone, confirmMsg)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
+
+    // Registration / address update flow
+    const name = formData.customer_name || ""
     if (name) {
       await pool.query("UPDATE customers SET name=$1 WHERE customer_id=$2", [name, cId])
     }
@@ -699,7 +801,12 @@ async function handleCustomerBot(msg, pid) {
       await saveManual(cId, vId, formData.manual_address)
     }
 
-    await sendText(pid, phone, `✅ *Registration complete!*\n\nWelcome${name ? `, ${name}` : ""}! 🎉\n\nYour address has been saved. You can now subscribe to daily deliveries.`)
+    const isUpdate = !!(await getAddress(cId, vId)) && state?.state === "awaiting_registration" && state?.temp_data?.after_addr === false
+    const confirmMsg = isUpdate
+      ? `✅ *Address updated!*\n\n📍 Your delivery address has been saved.`
+      : `✅ *Registration complete!*\n\nWelcome${name ? `, ${name}` : ""}! 🎉\n\nYour address has been saved. You can now subscribe to daily deliveries.`
+
+    await sendText(pid, phone, confirmMsg)
     const sub   = await getSubscription(cId, vId)
     const pause = await getActivePause(cId, vId)
     await setState(phone, "menu", vId)
@@ -796,26 +903,8 @@ async function handleCustomerBot(msg, pid) {
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
         return
       }
-      const customerSubs = await getCustomerProductSubs(cId, vId)
-      const subMap = {}
-      customerSubs.forEach(s => { subMap[s.product_id] = s })
-
-      const rows = products.map(p => {
-        const cs = subMap[p.product_id]
-        const status = (cs && cs.is_active)
-          ? `✅ ${cs.quantity}/day — ₹${(p.price * cs.quantity).toFixed(0)}`
-          : `○ Not subscribed`
-        return {
-          id:          `prd_${p.product_id}`,
-          title:       `${p.name}${p.unit ? ` ${p.unit}` : ""}`.slice(0, 24),
-          description: `${status} · ₹${p.price}${p.delivery_charge > 0 ? ` +₹${p.delivery_charge} del` : ""}`.slice(0, 72),
-        }
-      })
-      rows.push({ id: "menu", title: "🏠 Main Menu" })
-
-      await sendList(pid, phone,
-        `📦 *Your Daily Products*\n\nTap a product to subscribe or update quantity.\n✅ = currently subscribed`,
-        rows, "Manage"
+      await sendProductListFlow(pid, phone, cId, vId,
+        `📦 *Your Daily Products*\n\nSet your daily quantity for each product below. Leave blank to keep unchanged.`
       )
       await setState(phone, "manage_products", vId)
       return
@@ -829,18 +918,11 @@ async function handleCustomerBot(msg, pid) {
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
         return
       }
-      const rows = products.map(p => ({
-        id:          `adhoc_${p.product_id}`,
-        title:       `${p.name}${p.unit ? ` ${p.unit}` : ""}`.slice(0, 24),
-        description: `₹${p.price}${p.delivery_charge > 0 ? ` + ₹${p.delivery_charge} del` : ""}`.slice(0, 72),
-      }))
-      rows.push({ id: "menu", title: "🏠 Main Menu" })
-
-      await sendList(pid, phone,
-        `🛒 *Quick Order*\n\nSelect products for tomorrow. You can add multiple items.\n\n_(Tap a product to add to your order)_`,
-        rows, "Select"
+      const tomorrow = istTomorrowStr()
+      await sendProductListFlow(pid, phone, cId, vId,
+        `🛒 *Quick Order*\n\nEnter quantity for each item you want delivered on *${displayDate(tomorrow)}*.\nLeave blank to skip.`,
+        "adhoc"
       )
-      // cart = [] initially
       await setState(phone, "adhoc_product", vId, { cart: [] })
       return
     }
@@ -850,7 +932,7 @@ async function handleCustomerBot(msg, pid) {
       const addr = await getAddress(cId, vId)
       if (!addr) {
         await sendText(pid, phone, "📍 *First, let's save your delivery address.*\n\nThis only takes a moment!")
-        await startAddressFlow(pid, phone, vendor, settings, true)
+        await startAddressFlow(pid, phone, vendor, true)
         return
       }
       const maxQty = settings.max_quantity_per_order || 5
@@ -863,22 +945,52 @@ async function handleCustomerBot(msg, pid) {
     // View subscription
     if (input === "view") {
       if (!sub) { await sendMainMenu(pid, phone, sub, profile, pause, withProducts); return }
-      const addr  = await getAddress(cId, vId)
-      const price = settings.price_per_unit || 0
+      const addr     = await getAddress(cId, vId)
+      const tomorrow = istTomorrowStr()
+
       let text = `📋 *Your Subscription*\n\n`
-      text += `🥛 Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day\n`
-      if (price > 0) {
-        text += `💰 Rate: ₹${price} per packet\n`
-        text += `🗒 Monthly estimate: ₹${sub.quantity * price * 30}\n`
+
+      if (withProducts) {
+        // Show per-product subscriptions from customer_subscriptions
+        const prodSubs = await getCustomerProductSubs(cId, vId)
+        const active   = prodSubs.filter(s => s.is_active)
+        if (active.length > 0) {
+          active.forEach(s => {
+            const dailyCost = (parseFloat(s.price) * s.quantity + parseFloat(s.delivery_charge || 0)).toFixed(0)
+            text += `📦 *${s.name}${s.unit ? ` (${s.unit})` : ""}* — ${s.quantity}/day · ₹${dailyCost}/day\n`
+          })
+        } else {
+          text += `No active product subscriptions.\n`
+        }
+      } else {
+        text += `🥛 Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day\n`
       }
-      text += `📍 Address: ${formatAddress(addr)}\n`
+
+      text += `\n📍 *Address:* ${formatAddress(addr)}\n`
       if (pause) {
         text += pause.pause_until
           ? `\n⏸ *Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}*`
           : `\n⏸ *Paused (manual resume)*`
       } else {
-        text += `\n✅ Status: Active`
+        text += `\n✅ *Status:* Active`
       }
+
+      // Show tomorrow's quick orders if any
+      const { rows: qItems } = await pool.query(`
+        SELECT oi.quantity, p.name, p.unit, oi.price_at_order, oi.delivery_charge_at_order
+        FROM order_items oi
+        JOIN orders o ON o.order_id = oi.order_id
+        JOIN products p ON p.product_id = oi.product_id
+        WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date=$3 AND oi.order_type='adhoc'
+      `, [cId, vId, tomorrow])
+      if (qItems.length > 0) {
+        text += `\n\n🛒 *Quick Order for ${displayDate(tomorrow)}:*\n`
+        qItems.forEach(item => {
+          const cost = (item.price_at_order * item.quantity + (item.delivery_charge_at_order || 0)).toFixed(0)
+          text += `• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
+        })
+      }
+
       await sendText(pid, phone, text)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
       return
@@ -896,8 +1008,7 @@ async function handleCustomerBot(msg, pid) {
     // Update address
     if (input === "profile") {
       const addr = await getAddress(cId, vId)
-      if (addr) await sendText(pid, phone, `📍 *Current Address:* ${formatAddress(addr)}\n\nSelect a new address below:`)
-      await startAddressFlow(pid, phone, vendor, settings, false)
+      await startAddressFlow(pid, phone, vendor, false, addr || null)
       return
     }
 
@@ -1349,6 +1460,102 @@ async function handleCustomerBot(msg, pid) {
     return
   }
 
+  /* ── Flow adhoc order: confirmation step ── */
+
+  if (state.state === "flow_adhoc_confirm") {
+    const cart      = state.temp_data?.flow_cart || []
+    const delCharge = parseFloat(state.temp_data?.flow_delivery_charge || 0)
+
+    if (input === "flow_cancel_order") {
+      await sendText(pid, phone, "❌ *Order cancelled.* No order has been placed.")
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
+
+    if (input === "flow_confirm_order") {
+      if (cart.length === 0) {
+        const sub   = await getSubscription(cId, vId)
+        const pause = await getActivePause(cId, vId)
+        await setState(phone, "menu", vId)
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
+
+      const tomorrow = istTomorrowStr()
+
+      const { rows: orderRows } = await pool.query(`
+        INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
+        VALUES ($1,$2,$3,0)
+        ON CONFLICT (customer_id, vendor_id, order_date)
+        DO UPDATE SET quantity = orders.quantity
+        RETURNING order_id
+      `, [cId, vId, tomorrow])
+      const orderId = orderRows[0].order_id
+
+      // Delivery charge applied once to the first item
+      for (let idx = 0; idx < cart.length; idx++) {
+        const item = cart[idx]
+        const dc   = idx === 0 ? delCharge : 0
+        await pool.query(`
+          INSERT INTO order_items
+            (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
+          VALUES ($1,$2,$3,$4,$5,'adhoc')
+          ON CONFLICT (order_id, product_id)
+          DO UPDATE SET quantity=$3, price_at_order=$4, delivery_charge_at_order=$5, order_type='adhoc'
+        `, [orderId, item.product_id, item.qty, item.price, dc])
+      }
+
+      await pool.query(`
+        UPDATE orders SET quantity = (SELECT COALESCE(SUM(quantity),0) FROM order_items WHERE order_id=$1)
+        WHERE order_id = $1
+      `, [orderId])
+
+      const addr       = await getAddress(cId, vId)
+      const itemTotal  = cart.reduce((s, i) => s + i.price * i.qty, 0)
+      const grandTotal = itemTotal + delCharge
+      const itemLines  = cart.map(item =>
+        `📦 ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
+      ).join("\n")
+      const delLine = delCharge > 0 ? `\n🚚 Delivery: ₹${delCharge.toFixed(2)}` : `\n🚚 Delivery: Free`
+
+      await sendText(pid, phone,
+        `✅ *Order Placed!*\n\n${itemLines}${delLine}\n\n` +
+        `🧾 Total: ₹${grandTotal.toFixed(2)}\n` +
+        `📍 ${formatAddress(addr)}\n` +
+        `📅 Delivery: ${displayDate(tomorrow)}\n\nThank you! 🙏`
+      )
+
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
+
+    // Any other input — re-show the confirmation
+    const itemTotal  = cart.reduce((s, i) => s + i.price * i.qty, 0)
+    const grandTotal = itemTotal + delCharge
+    const lines      = cart.map(item => {
+      const cost = (item.price * item.qty).toFixed(2)
+      return `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — ₹${cost}`
+    }).join("\n")
+    const delLine = delCharge > 0
+      ? `\n🚚 *Delivery Charge:* ₹${delCharge.toFixed(2)}`
+      : `\n🚚 *Delivery:* Free`
+
+    await sendButtons(pid, phone,
+      `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n\nConfirm your order?`,
+      [
+        { id: "flow_confirm_order", title: "✅ Confirm Order" },
+        { id: "flow_cancel_order",  title: "❌ Cancel"        },
+      ]
+    )
+    return
+  }
+
   /* ── Manage per-product subscriptions: product selected ── */
 
   if (state.state === "manage_products") {
@@ -1392,18 +1599,10 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Re-show the product list on any other input
-    const products = await getVendorProducts(vId, "subscription")
-    const customerSubs = await getCustomerProductSubs(cId, vId)
-    const subMap = {}
-    customerSubs.forEach(s => { subMap[s.product_id] = s })
-    const rows = products.map(p => {
-      const cs = subMap[p.product_id]
-      const status = (cs && cs.is_active) ? `✅ ${cs.quantity}/day` : `○ Not subscribed`
-      return { id: `prd_${p.product_id}`, title: `${p.name}${p.unit ? ` ${p.unit}` : ""}`.slice(0, 24), description: status }
-    })
-    rows.push({ id: "menu", title: "🏠 Main Menu" })
-    await sendList(pid, phone, `📦 *Your Daily Products*\n\nTap a product to update:`, rows, "Manage")
+    // Re-open the flow on any other input
+    await sendProductListFlow(pid, phone, cId, vId,
+      `📦 *Your Daily Products*\n\nSet your daily quantity for each product below. Leave blank to keep unchanged.`
+    )
     return
   }
 
@@ -1412,7 +1611,7 @@ async function handleCustomerBot(msg, pid) {
   if (state.state === "product_qty") {
     const qty = parseInt((input || "").trim())
     if (isNaN(qty) || qty < 0) {
-      await sendText(pid, phone, "⚠️ Please enter a valid number (0 to unsubscribe, 1 or more to subscribe).")
+      await sendText(pid, phone, "⚠️ Please enter a valid number (1 or more to subscribe, 0 to stop delivery).")
       return
     }
 
@@ -1635,7 +1834,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    const tomorrow = dateToStr(addDays(new Date(), 1))
+    const tomorrow = istTomorrowStr()
 
     // Find or create order for tomorrow
     const { rows: orderRows } = await pool.query(`
