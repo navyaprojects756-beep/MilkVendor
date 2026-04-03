@@ -33,6 +33,13 @@ function getDecoded(req) {
   }
 }
 
+function getISTDateStr(offsetDays = 0) {
+  const now = new Date()
+  const istNow = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
+  const date = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + offsetDays)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
 // Middleware: only tokens with role=admin (or legacy tokens without role) can proceed
 function requireAdmin(req, res, next) {
   try {
@@ -172,8 +179,8 @@ router.get("/orders", async (req, res) => {
     const total = await pool.query(`
       SELECT COALESCE(SUM(quantity), 0) total_packets
       FROM orders
-      WHERE vendor_id = $1 AND order_date = CURRENT_DATE + 1
-    `, [vendorId])
+      WHERE vendor_id = $1 AND order_date = $2::date
+    `, [vendorId, getISTDateStr(1)])
 
     const vendor = await pool.query(
       "SELECT vendor_name FROM vendors WHERE vendor_id = $1",
@@ -645,7 +652,7 @@ router.get("/order-window/:vendorId", async (req, res) => {
 
     let is_open = true
     if (s.order_window_enabled && p.order_accept_start && p.order_accept_end) {
-      const now   = new Date()
+      const now   = new Date(new Date().getTime() + (new Date().getTimezoneOffset() + 330) * 60000)
       const hhmm  = now.getHours() * 60 + now.getMinutes()
       const [sh, sm] = p.order_accept_start.split(":").map(Number)
       const [eh, em] = p.order_accept_end.split(":").map(Number)
@@ -989,7 +996,7 @@ router.post("/payments", requireAdmin, async (req, res) => {
       payment_method || "cash",
       notes || null,
       screenshot_url || null,
-      payment_date || new Date().toISOString().slice(0, 10),
+      payment_date || getISTDateStr(0),
       period_from || null,
       period_to   || null,
     ])
@@ -1116,9 +1123,9 @@ router.get("/pauses", requireAdmin, async (req, res) => {
       LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
       LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
       WHERE sp.vendor_id = $1
-        AND (sp.pause_until IS NULL OR sp.pause_until >= CURRENT_DATE)
-      ORDER BY sp.pause_from ASC
-    `, [vendorId])
+        AND (sp.pause_until IS NULL OR sp.pause_until >= $2::date)
+      ORDER BY sp.pause_from DESC, sp.pause_id DESC
+    `, [vendorId, getISTDateStr(0)])
     res.json(r.rows)
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1174,10 +1181,10 @@ router.post("/products", requireAdmin, async (req, res) => {
     `, [vendorId, name.trim(), unit.trim(), price, delivery_charge, order_type, sort_order])
 
     const product = rows[0]
-    await pool.query(`
-      INSERT INTO product_price_history (product_id, price, delivery_charge, effective_from)
-      VALUES ($1,$2,$3,CURRENT_DATE)
-    `, [product.product_id, price, delivery_charge])
+      await pool.query(`
+        INSERT INTO product_price_history (product_id, price, delivery_charge, effective_from)
+        VALUES ($1,$2,$3,$4)
+    `, [product.product_id, price, delivery_charge, getISTDateStr(0)])
 
     res.json({ product })
   } catch (e) {
@@ -1212,8 +1219,8 @@ router.put("/products/:id", requireAdmin, async (req, res) => {
     if (priceChanged) {
       await pool.query(`
         INSERT INTO product_price_history (product_id, price, delivery_charge, effective_from)
-        VALUES ($1,$2,$3,CURRENT_DATE)
-      `, [req.params.id, price, delivery_charge])
+        VALUES ($1,$2,$3,$4)
+      `, [req.params.id, price, delivery_charge, getISTDateStr(0)])
     }
 
     res.json({ product: rows[0] })

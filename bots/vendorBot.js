@@ -5,6 +5,23 @@ const { generateOrdersForVendor } = require("../services/orderGenerator")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
+function getISTDateStr(offsetDays = 0) {
+  const now = new Date()
+  const istNow = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
+  const date = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + offsetDays)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function formatISTDateLabel(dateStr) {
+  const [yr, mo, dy] = String(dateStr).split("-").map(Number)
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+  }).format(new Date(Date.UTC(yr, mo - 1, dy, 12, 0, 0)))
+}
+
 /* ─── SEND ─────────────────────────────────────────────── */
 
 async function sendText(phoneNumberId, phone, text) {
@@ -96,9 +113,10 @@ async function handleVendorBot(msg, phoneNumberId) {
     try {
       await generateOrdersForVendor(vendor.vendor_id)
 
+      const tomorrowStr = getISTDateStr(1)
       const ordersRes = await pool.query(
-        "SELECT COUNT(*) AS total FROM orders WHERE vendor_id=$1 AND order_date=CURRENT_DATE + 1",
-        [vendor.vendor_id]
+        "SELECT COUNT(*) AS total FROM orders WHERE vendor_id=$1 AND order_date=$2::date",
+        [vendor.vendor_id, tomorrowStr]
       )
       const total = ordersRes.rows[0]?.total || 0
 
@@ -107,7 +125,7 @@ async function handleVendorBot(msg, phoneNumberId) {
         phone,
         `✅ *Orders Generated!*\n\n` +
         `📦 Tomorrow's orders: *${total}*\n` +
-        `📅 Date: ${new Date(Date.now() + 86400000).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" })}\n\n` +
+        `Date: ${formatISTDateLabel(tomorrowStr)}\n\n` +
         `Open dashboard to view details.`
       )
     } catch (err) {

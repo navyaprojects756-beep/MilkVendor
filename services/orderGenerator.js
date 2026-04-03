@@ -183,7 +183,12 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
   }
 }
 
-/** Format a Date as 'YYYY-MM-DD' using local timezone (avoids UTC offset issues). */
+function getISTNow() {
+  const now = new Date()
+  return new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
+}
+
+/** Format a Date as 'YYYY-MM-DD' using IST timezone logic. */
 function localDateStr(date) {
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, "0")
@@ -202,7 +207,7 @@ async function generateOrdersForVendor(vendorId) {
   )
   const hasProducts = parseInt(prodCheck[0].cnt) > 0
 
-  const now = new Date()
+  const now = getISTNow()
   const today    = localDateStr(now)
   const tomorrow = localDateStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))
 

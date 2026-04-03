@@ -164,7 +164,7 @@ function formatAddress(addr) {
 
 function isOrderWindowOpen(settings) {
   if (!settings.order_window_enabled) return true
-  const now = new Date()
+  const now = getISTNow()
   const day = now.getDay()
   const activeDays = (settings.active_days || [0, 1, 2, 3, 4, 5, 6]).map(Number)
   if (!activeDays.includes(day)) return false
@@ -181,10 +181,14 @@ function getISTNow() {
   return new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
 }
 
-function istTomorrowStr() {
+function getISTDateStr(offsetDays = 0) {
   const ist = getISTNow()
-  const tom = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate() + 1)
-  return `${tom.getFullYear()}-${String(tom.getMonth() + 1).padStart(2, "0")}-${String(tom.getDate()).padStart(2, "0")}`
+  const date = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate() + offsetDays)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function istTomorrowStr() {
+  return getISTDateStr(1)
 }
 
 function addDays(date, n) {
@@ -201,11 +205,19 @@ function dateToStr(date) {
 }
 
 function displayDate(val) {
-  if (!val) return "—"
-  // pg returns DATE columns as JS Date objects (midnight UTC); strings come as "YYYY-MM-DD"
-  const iso = val instanceof Date ? val.toISOString() : String(val)
-  const [yr, mo, dy] = iso.slice(0, 10).split("-").map(Number)
-  return new Date(yr, mo - 1, dy).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+  if (!val) return "-"
+  const fmt = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })
+  if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}$/.test(val)) {
+    const [yr, mo, dy] = val.split("-").map(Number)
+    return fmt.format(new Date(Date.UTC(yr, mo - 1, dy, 12, 0, 0)))
+  }
+  const date = val instanceof Date ? val : new Date(val)
+  return fmt.format(date)
 }
 
 
@@ -377,7 +389,7 @@ async function setState(phone, state, vendorId, temp = {}) {
 /* ─── INVOICE HELPERS ──────────────────────────────────── */
 
 function getInvoiceDateRange(period) {
-  const now = new Date()
+  const now = getISTNow()
   const y   = now.getFullYear()
   const m   = now.getMonth()
 
@@ -392,12 +404,12 @@ function getInvoiceDateRange(period) {
     return { from: dateToStr(from), to: dateToStr(to) }
   }
   if (period === "last_7") {
-    const to    = new Date(); to.setDate(to.getDate() - 1)
+    const to    = getISTNow(); to.setDate(to.getDate() - 1)
     const from  = new Date(to); from.setDate(to.getDate() - 6)
     return { from: dateToStr(from), to: dateToStr(to) }
   }
   if (period === "last_30") {
-    const to    = new Date(); to.setDate(to.getDate() - 1)
+    const to    = getISTNow(); to.setDate(to.getDate() - 1)
     const from  = new Date(to); from.setDate(to.getDate() - 29)
     return { from: dateToStr(from), to: dateToStr(to) }
   }
@@ -494,13 +506,19 @@ async function getActivePause(cId, vId) {
   const r = await pool.query(`
     SELECT * FROM subscription_pauses
     WHERE customer_id=$1 AND vendor_id=$2
-      AND (pause_until IS NULL OR pause_until >= CURRENT_DATE)
-    ORDER BY pause_from ASC LIMIT 1
-  `, [cId, vId])
+      AND (pause_until IS NULL OR pause_until >= $3)
+    ORDER BY pause_from DESC, pause_id DESC LIMIT 1
+  `, [cId, vId, getISTDateStr(0)])
   return r.rows[0] || null
 }
 
 async function savePause(cId, vId, from, until) {
+  await pool.query(
+    `DELETE FROM subscription_pauses
+     WHERE customer_id=$1 AND vendor_id=$2
+       AND (pause_until IS NULL OR pause_until >= $3)`,
+    [cId, vId, getISTDateStr(0)]
+  )
   await pool.query(
     "INSERT INTO subscription_pauses(customer_id, vendor_id, pause_from, pause_until) VALUES($1,$2,$3,$4)",
     [cId, vId, from, until]
@@ -552,8 +570,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     }
     if (withProducts) {
       rows.push(
-        { id: "manage_products", title: "📦 Subscribe Daily Products", description: "Choose your daily delivery products" },
-        { id: "adhoc_order",     title: "🛒 Order Tomorrow Products",  description: "Order extra products for tomorrow" },
+        { id: "manage_products", title: "📦 Daily Subscription", description: "Choose your daily delivery products" },
+        { id: "adhoc_order",     title: "🛒 Order Tomorrow",     description: "Order extra products for tomorrow" },
         { id: "profile",         title: "👤 Profile",         description: "View or update your details" }
       )
     } else {
@@ -574,7 +592,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice",  title: "🧾 Get Bill",           description: "Download your bill"            },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Subscription Products", description: "Update your daily delivery products" })
+      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Products", description: "Update your daily delivery products" })
     }
   } else if (sub.status === "active") {
     header = showPrompt ? `🥛 *${name}*\n\nHow can we help you today?` : `🥛 *${name}*`
@@ -585,8 +603,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"          },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Subscription Products", description: "Update your daily delivery products" })
-      rows.splice(2, 0, { id: "adhoc_order",     title: "🛒 Order Tomorrow Products",            description: "Order extra products for tomorrow" })
+      rows.splice(1, 0, { id: "manage_products", title: "📦 Change Daily Products", description: "Update your daily delivery products" })
+      rows.splice(2, 0, { id: "adhoc_order",     title: "🛒 Order Tomorrow",        description: "Order extra products for tomorrow" })
     } else {
       rows.splice(1, 0, { id: "change", title: "✏️ Change Quantity", description: "Update daily packets" })
     }
@@ -601,7 +619,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "🧾 Get Bill",          description: "Download your bill"       }
     )
     if (withProducts) {
-      rows.unshift({ id: "manage_products", title: "📦 Subscribe Daily Products", description: "Choose your daily delivery products" })
+      rows.unshift({ id: "manage_products", title: "📦 Daily Subscription", description: "Choose your daily delivery products" })
     } else {
       rows.unshift(
         { id: "resume",  title: "▶️ Resume Delivery",  description: `Continue with ${sub.quantity} packet/day` },
@@ -1129,7 +1147,7 @@ async function handleCustomerBot(msg, pid) {
 
     // Get invoice
     if (input === "get_invoice") {
-      const now       = new Date()
+      const now       = getISTNow()
       const thisMonth = now.toLocaleString("en-IN", { month: "long", year: "numeric" })
       const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
                           .toLocaleString("en-IN", { month: "long", year: "numeric" })
@@ -1243,7 +1261,7 @@ async function handleCustomerBot(msg, pid) {
   /* ── Pause selection ── */
 
   if (state.state === "pause_select") {
-    const today    = new Date(); today.setHours(0, 0, 0, 0)
+    const today    = getISTNow(); today.setHours(0, 0, 0, 0)
     const tomorrow = addDays(today, 1)
 
     const dayMatch = input.match(/^pause_(\d+)$/)
@@ -1570,8 +1588,8 @@ async function handleCustomerBot(msg, pid) {
       INSERT INTO payments
         (customer_id, vendor_id, amount, payment_method, screenshot_url,
          recorded_by, payment_date, period_from, period_to)
-      VALUES ($1,$2,$3,'other',$4,'customer',CURRENT_DATE,$5,$6)
-    `, [cId, vId, totalAmount || 0, screenshotUrl, periodFrom || null, periodTo || null])
+      VALUES ($1,$2,$3,'other',$4,'customer',$5,$6,$7)
+    `, [cId, vId, totalAmount || 0, screenshotUrl, getISTDateStr(0), periodFrom || null, periodTo || null])
 
     // Mark covered orders as paid
     if (periodFrom && periodTo) {

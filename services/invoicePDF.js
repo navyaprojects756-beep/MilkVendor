@@ -2,11 +2,18 @@ const PDFDocument = require("pdfkit")
 
 /* ── helpers ── */
 function dateLabel(val) {
-  const iso = val instanceof Date ? val.toISOString() : String(val)
-  const [yr, mo, dy] = iso.slice(0, 10).split("-").map(Number)
-  return new Date(yr, mo - 1, dy).toLocaleDateString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric"
+  const fmt = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
   })
+  if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}$/.test(val)) {
+    const [yr, mo, dy] = val.split("-").map(Number)
+    return fmt.format(new Date(Date.UTC(yr, mo - 1, dy, 12, 0, 0)))
+  }
+  const date = val instanceof Date ? val : new Date(val)
+  return fmt.format(date)
 }
 
 /* ── colours ── */
@@ -66,7 +73,9 @@ function generateInvoicePDF(data, from, to) {
     const billNo  = `BILL-${from.replace(/-/g, "")}-${String(customer.phone).slice(-4)}`
     const bizName = (vendor.business_name || "MilkRoute").trim()
     const bizAddr = [vendor.area, vendor.city].filter(Boolean).join(", ")
-    const today   = dateLabel(new Date().toISOString().slice(0, 10))
+    const now = new Date()
+    const istNow = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
+    const today   = dateLabel(`${istNow.getFullYear()}-${String(istNow.getMonth() + 1).padStart(2, "0")}-${String(istNow.getDate()).padStart(2, "0")}`)
 
     /* ══ HEADER ══ */
     doc.rect(0, 0, W, 90).fill(NAVY)
