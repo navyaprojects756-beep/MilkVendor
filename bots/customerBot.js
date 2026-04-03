@@ -727,6 +727,14 @@ async function handleCustomerBot(msg, pid) {
   if (isFlowReply) {
     const formData = JSON.parse(msg.interactive.nfm_reply.response_json || "{}")
     console.log("📦 Product flow nfm_reply formData:", JSON.stringify(formData))
+    const hasProductQtyKeys = Object.keys(formData || {}).some((key) => /^qty_\d+$/.test(key))
+
+    // Product-list flow replies can arrive without the bot needing to process them here again.
+    // Guard them so they are never misread as registration/address flow submissions.
+    if (hasProductQtyKeys && state?.state !== "manage_products" && state?.state !== "adhoc_product") {
+      console.log("📦 Ignoring product flow nfm_reply outside product states")
+      return
+    }
 
     // Product List flow: state is manage_products or adhoc_product
     const isProductListFlow = state?.state === "manage_products" || state?.state === "adhoc_product"

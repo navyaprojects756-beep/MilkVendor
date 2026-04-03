@@ -1,0 +1,146 @@
+{
+  "version": "6.0",
+  "data_api_version": "3.0",
+  "routing_model": {
+    "PRODUCT_LIST": ["SUCCESS"]
+  },
+  "screens": [
+    {
+      "id": "PRODUCT_LIST",
+      "title": "Select Quantities",
+      "data": {
+        "product_1_name": { "type": "string", "__example__": "Milk (500ml)" },
+        "product_1_price": { "type": "string", "__example__": "Rs.25.00 per unit" },
+        "show_product_1": { "type": "boolean", "__example__": true },
+        "qty_1_init": { "type": "string", "__example__": "" },
+        "product_2_name": { "type": "string", "__example__": "Curd (200g)" },
+        "product_2_price": { "type": "string", "__example__": "Rs.20.00 per unit" },
+        "show_product_2": { "type": "boolean", "__example__": true },
+        "qty_2_init": { "type": "string", "__example__": "" },
+        "product_3_name": { "type": "string", "__example__": "Butter (100g)" },
+        "product_3_price": { "type": "string", "__example__": "Rs.60.00 per unit" },
+        "show_product_3": { "type": "boolean", "__example__": false },
+        "qty_3_init": { "type": "string", "__example__": "" },
+        "product_4_name": { "type": "string", "__example__": "Paneer (200g)" },
+        "product_4_price": { "type": "string", "__example__": "Rs.80.00 per unit" },
+        "show_product_4": { "type": "boolean", "__example__": false },
+        "qty_4_init": { "type": "string", "__example__": "" },
+        "product_5_name": { "type": "string", "__example__": "Ghee (500ml)" },
+        "product_5_price": { "type": "string", "__example__": "Rs.300.00 per unit" },
+        "show_product_5": { "type": "boolean", "__example__": false },
+        "qty_5_init": { "type": "string", "__example__": "" },
+        "product_6_name": { "type": "string", "__example__": "Lassi (200ml)" },
+        "product_6_price": { "type": "string", "__example__": "Rs.15.00 per unit" },
+        "show_product_6": { "type": "boolean", "__example__": false },
+        "qty_6_init": { "type": "string", "__example__": "" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextInput",
+            "name": "qty_1",
+            "label": "${data.product_1_name}",
+            "helper-text": "${data.product_1_price}",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_1_init}",
+            "visible": "${data.show_product_1}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_2",
+            "label": "${data.product_2_name}",
+            "helper-text": "${data.product_2_price}",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_2_init}",
+            "visible": "${data.show_product_2}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_3",
+            "label": "${data.product_3_name}",
+            "helper-text": "${data.product_3_price}",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_3_init}",
+            "visible": "${data.show_product_3}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_4",
+            "label": "${data.product_4_name}",
+            "helper-text": "${data.product_4_price}",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_4_init}",
+            "visible": "${data.show_product_4}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_5",
+            "label": "${data.product_5_name}",
+            "helper-text": "${data.product_5_price}",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_5_init}",
+            "visible": "${data.show_product_5}"
+          },
+          {
+            "type": "TextInput",
+            "name": "qty_6",
+            "label": "${data.product_6_name}",
+            "helper-text": "${data.product_6_price}",
+            "input-type": "number",
+            "required": false,
+            "init-value": "${data.qty_6_init}",
+            "visible": "${data.show_product_6}"
+          },
+          {
+            "type": "Footer",
+            "label": "Submit",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "qty_1": "${form.qty_1}",
+                "qty_2": "${form.qty_2}",
+                "qty_3": "${form.qty_3}",
+                "qty_4": "${form.qty_4}",
+                "qty_5": "${form.qty_5}",
+                "qty_6": "${form.qty_6}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SUCCESS",
+      "title": "Submitted",
+      "terminal": true,
+      "data": {},
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Done!"
+          },
+          {
+            "type": "TextBody",
+            "text": "Your order details have been received."
+          },
+          {
+            "type": "Footer",
+            "label": "Close",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

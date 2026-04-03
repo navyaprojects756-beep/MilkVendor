@@ -2,6 +2,7 @@ const express  = require("express")
 const crypto   = require("crypto")
 const fs_      = require("fs")
 const path_    = require("path")
+const axios    = require("axios")
 const pool     = require("../db")
 const { generateOrdersForVendor } = require("../services/orderGenerator")
 
@@ -56,6 +57,85 @@ function istDateStr(d) {
 
 /* ── Constants ── */
 const MAX_SLOTS = 6
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
+
+async function sendWhatsApp(phoneNumberId, payload) {
+  if (!phoneNumberId || !WHATSAPP_TOKEN) return
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    )
+  } catch (err) {
+    console.error("Customer flow WhatsApp send error:", JSON.stringify(err.response?.data || err.message))
+  }
+}
+
+async function sendText(phoneNumberId, phone, text) {
+  await sendWhatsApp(phoneNumberId, {
+    messaging_product: "whatsapp",
+    to: phone,
+    type: "text",
+    text: { body: text },
+  })
+}
+
+async function sendButtons(phoneNumberId, phone, body, buttons) {
+  await sendWhatsApp(phoneNumberId, {
+    messaging_product: "whatsapp",
+    to: phone,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: body },
+      action: {
+        buttons: buttons.map((b) => ({
+          type: "reply",
+          reply: { id: b.id, title: b.title },
+        })),
+      },
+    },
+  })
+}
+
+async function getFlowContext(vendorId, customerId) {
+  const [{ rows: vendorRows }, { rows: customerRows }] = await Promise.all([
+    pool.query(`SELECT vendor_id, phone_number_id FROM vendors WHERE vendor_id=$1`, [vendorId]),
+    pool.query(`SELECT customer_id, phone FROM customers WHERE customer_id=$1`, [customerId]),
+  ])
+  return {
+    vendor: vendorRows[0] || null,
+    customer: customerRows[0] || null,
+  }
+}
+
+async function upsertConversationState(phone, state, vendorId, tempData = {}) {
+  if (!phone) return
+  await pool.query(`
+    INSERT INTO conversation_state(phone, state, selected_vendor_id, temp_data)
+    VALUES($1, $2, $3, $4)
+    ON CONFLICT(phone) DO UPDATE SET
+      state=$2,
+      selected_vendor_id=$3,
+      temp_data=$4
+  `, [phone, state, vendorId, tempData])
+}
+
+function readQty(flowData, index) {
+  const candidates = [
+    flowData?.[`qty_${index}`],
+    flowData?.form?.[`qty_${index}`],
+    flowData?.data?.[`qty_${index}`],
+    flowData?.input?.[`qty_${index}`],
+  ]
+  return candidates.find((value) => value !== undefined && value !== null)
+}
 
 /* ── Build product screen data for INIT response ── */
 async function buildProductScreenData(vendorId, customerId, mode = "sub") {
@@ -200,7 +280,7 @@ router.post("/", async (req, res) => {
           const cartItems = []
           for (let i = 0; i < products.length; i++) {
             const p   = products[i]
-            const raw = flowData?.[`qty_${i + 1}`]
+            const raw = readQty(flowData, i + 1)
             if (!raw || String(raw).trim() === "") continue
             const qty = parseInt(raw)
             if (isNaN(qty) || qty < 1) continue
@@ -234,7 +314,7 @@ router.post("/", async (req, res) => {
           let anyChanged = false
           for (let i = 0; i < products.length; i++) {
             const p   = products[i]
-            const raw = flowData?.[`qty_${i + 1}`]
+            const raw = readQty(flowData, i + 1)
             if (raw === undefined || raw === null || String(raw).trim() === "") continue
             const qty = parseInt(raw)
             if (isNaN(qty) || qty < 0) continue
