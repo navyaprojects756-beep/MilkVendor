@@ -1,592 +1,438 @@
-# MilkWhatsAppBot — Full Requirements Document
+# MilkWhatsAppBot - Current Requirements And Change Log
 
-> **Last updated:** 2026-04-02  
-> **Purpose:** Single source of truth for all functional and technical requirements.  
-> Update this file whenever a feature is added, changed, or removed.
-
----
-
-## 1. Project Overview
-
-A WhatsApp-based milk subscription management system with two parts:
-
-| Part | Technology | Purpose |
-|------|-----------|---------|
-| **Backend Bot** | Node.js + Express + PostgreSQL | Handles WhatsApp webhooks, customer conversations, order generation, billing |
-| **Vendor Dashboard** | React (Vite) SPA | Admin UI for vendors to manage customers, orders, products, billing |
-
-The system supports **multiple vendors**, each with their own WhatsApp phone number, customers, products, and subscriptions. A vendor accesses the dashboard via a time-limited JWT link (2 hours expiry) sent through WhatsApp.
+> Last updated: 2026-04-03  
+> This file reflects the current backend and frontend behavior after the recent WhatsApp flow, pause/resume, delivery charge, IST timezone, and dashboard updates.
 
 ---
 
-## 2. Tech Stack
+## 1. Project Summary
 
-### Backend (`e:/Navya Projects/MilkWhatsAppBot/`)
-- **Runtime:** Node.js
-- **Framework:** Express.js
-- **Database:** PostgreSQL (via `pg` pool)
-- **WhatsApp API:** Meta Cloud API (Graph API v18.0)
-- **Auth:** JWT (`jsonwebtoken`) — vendor dashboard tokens
-- **PDF:** PDFKit (`pdfkit`)
-- **File uploads:** Multer
-- **Encryption:** Node.js built-in `crypto` (AES-128-GCM + RSA OAEP SHA-256) — for WhatsApp Flows
-- **Deployment target:** Railway (with environment variables)
+MilkWhatsAppBot is a multi-vendor milk and dairy delivery platform with:
 
-### Frontend (`e:/Navya Projects/vendor-dashboard/`)
-- **Framework:** React + Vite
-- **Styling:** Tailwind CSS
-- **Routing:** React Router
-- **HTTP:** fetch API (no Axios)
-- **Port (local):** 5173
+- A WhatsApp-first customer journey for registration, profile updates, daily subscriptions, quick orders, pause/resume, billing, and support messages.
+- A vendor dashboard for products, customers, orders, pauses, messages, billing, payments, and settings.
+
+The current system supports:
+
+- Multi-product daily subscriptions
+- Quick orders for upcoming deliveries
+- Shared WhatsApp Flows for both subscription and adhoc product selection
+- One order containing both daily and extra items
+- IST-safe business dates even when hosting/database are outside India
 
 ---
 
-## 3. Database Schema (Key Tables)
+## 2. Technology Stack
 
-| Table | Key Columns | Notes |
-|-------|------------|-------|
-| `vendors` | `vendor_id`, `business_name`, `phone_number_id`, `whatsapp_number`, `area`, `city`, `logo_url`, `order_window_start`, `order_window_end` | One row per WhatsApp phone number |
-| `customers` | `customer_id`, `vendor_id`, `phone`, `name`, `address`, `state` | `state` = current bot conversation state |
-| `subscriptions` | `subscription_id`, `customer_id`, `vendor_id`, `status` (`active`/`paused`/`cancelled`) | One subscription per customer-vendor pair |
-| `customer_subscriptions` | `customer_id`, `vendor_id`, `product_id`, `quantity`, `is_active` | Per-product subscription lines |
-| `products` | `product_id`, `vendor_id`, `name`, `unit`, `price`, `delivery_charge`, `is_active` | Products offered by vendor |
-| `orders` | `order_id`, `customer_id`, `vendor_id`, `order_date`, `quantity`, `is_delivered`, `payment_status` | One order per customer per date |
-| `order_items` | `item_id`, `order_id`, `product_id`, `quantity`, `price_at_order`, `delivery_charge_at_order`, `order_type` (`subscription`/`adhoc`) | Per-product line within an order |
-| `subscription_pauses` | `customer_id`, `vendor_id`, `pause_from`, `pause_until` | Date ranges when delivery is paused |
-| `apartments` | `apartment_id`, `vendor_id`, `name` | Apartment complexes managed by vendor |
-| `blocks` | `block_id`, `apartment_id`, `name` | Blocks/towers within apartments |
-| `payments` | `payment_id`, `customer_id`, `vendor_id`, `amount`, `payment_date`, `screenshot_url`, `notes` | Payment records |
-| `messages` | `message_id`, `customer_id`, `vendor_id`, `direction` (`inbound`/`outbound`), `content`, `created_at` | Inbox for non-order messages |
+### Backend
 
----
+- Node.js
+- Express
+- PostgreSQL
+- Meta WhatsApp Cloud API
+- JWT authentication for vendor dashboard
+- PDFKit for invoice generation
+- Multer for uploads
+- AES-128-GCM + RSA OAEP for WhatsApp Flow payload encryption
 
-## 4. Backend — Bot (`bots/customerBot.js`)
+### Frontend
 
-### 4.1 Webhook Entry Point
-
-- **Endpoint:** `POST /webhook`
-- Receives all WhatsApp messages for all registered vendors
-- Routes each message to the correct vendor by matching `entry[0].changes[0].value.metadata.phone_number_id` against the `vendors` table
-- Ignores status update webhooks (only process `messages` entries)
-
-### 4.2 New Customer Registration (WhatsApp Flow)
-
-**Trigger:** Customer sends any message (e.g., "Hi") and has no name/address on file.
-
-**Flow:**
-1. Bot sends a **WhatsApp Flow** registration template (`customer_registration`) using Meta's template + flow button
-2. `flow_token` = `vendorId` (used by backend to load correct apartments)
-3. Customer fills a multi-screen form:
-   - **WELCOME screen:** Enter name
-   - **APARTMENT_ADDRESS screen:** Choose address type (Apartment / House), apartment dropdown (dynamic from DB)
-   - **APARTMENT_BLOCK screen:** (if Apartment) Choose block/tower
-   - **HOUSE_ADDRESS screen:** (if House) Enter manual address text
-4. On form submission (`nfm_reply` webhook message), backend:
-   - Updates `customers.name`
-   - Saves apartment/block or manual address
-   - Sends confirmation text + main menu
-
-**State:** `awaiting_registration` — bot ignores other messages until flow completes.
-
-**Environment variable:** `REGISTRATION_FLOW_ID` — Flow ID from Meta WhatsApp Manager.
-
-**Template name:** `customer_registration` (must be approved by Meta).
-
-### 4.3 Conversation States
-
-| State | Meaning | Next action |
-|-------|---------|------------|
-| `null` / fresh | New message received | Send registration flow or main menu |
-| `awaiting_registration` | Flow sent, waiting for form | Handle `nfm_reply` |
-| `menu` | Main menu shown | Route based on selection |
-| `adhoc_select_product` | Selecting product for adhoc order | Show product list |
-| `adhoc_confirm` | Confirming adhoc order details | Confirm/cancel |
-| `pause_select` | Selecting pause type | Date entry |
-| `pause_from` | Entering pause start date | Validate and save |
-| `pause_until` | Entering pause end date | Save pause |
-| `invoice_period` | Entered bill date range | Generate and send invoice |
-| `payment_amount` | Entering payment amount | Record payment |
-
-### 4.4 Main Menu Options
-
-Shown as an interactive list. Options:
-1. **My Subscription** — view current subscription details
-2. **Pause Delivery** — pause for date range
-3. **Resume Delivery** — resume paused subscription
-4. **Adhoc Order** — order extra product for one day
-5. **Generate Bill** — get invoice for a date range
-6. **Make Payment** — record payment with optional screenshot
-
-### 4.5 Order Window (Time Gate)
-
-- Vendor has `order_window_start` and `order_window_end` times in the DB
-- Orders / pauses / adhoc requests only accepted within this window
-- Messages received outside window: save to `messages` inbox + auto-reply with window hours
-
-### 4.6 Unrecognized Messages (Menu State)
-
-- If customer sends text not matching any menu option while in `menu` state:
-  - Save message to `messages` inbox (`saveInboundMessage`)
-  - Send auto-reply: "Vendor will check your message shortly. For menu options, reply with 1-6."
-
-### 4.7 Invoice / Bill (WhatsApp)
-
-**Trigger:** Customer selects "Generate Bill", enters date range as `DD/MM/YYYY - DD/MM/YYYY`
-
-**Calculation:**
-- Queries `orders` joined with `order_items` for the period
-- If `order_items` exist: total = `SUM(quantity × (price_at_order + delivery_charge_at_order))`
-- Legacy (no items): total = `SUM(quantity × price_per_unit)` from subscription
-
-**WhatsApp text message format:**
-```
-📋 Your Milk Bill
-
-Period: DD Mon YYYY – DD Mon YYYY
-Total Amount: ₹XXX.XX
-Amount Due: ₹XXX.XX (after payments)
-
-For full details, check the PDF.
-```
-- No packet count, rate, or per-delivery breakdown in the text message
-
-**PDF:** Sent as document attachment after the text message.
-
-### 4.8 Adhoc Orders
-
-- Customer selects product from vendor's active product list
-- Enters quantity
-- Confirms → creates an `order` + `order_item` with `order_type = 'adhoc'`
-- Only allowed within order window
-
-### 4.9 Payment Recording
-
-- Customer enters amount
-- Optional: sends payment screenshot image (uploaded and saved)
-- Saves to `payments` table
+- React + Vite
+- MUI dashboard UI
+- React Router
 
 ---
 
-## 5. Backend — WhatsApp Flow Endpoint
+## 3. Important Database Model
 
-### 5.1 Encryption
+### Core tables
 
-WhatsApp Flows use end-to-end encryption:
-- **RSA OAEP (SHA-256):** Meta encrypts the AES key using the vendor's public key
-- **AES-128-GCM:** Actual request payload encrypted with the AES key
-- **Response:** Backend re-encrypts response with same AES key (flipped IV) and returns raw Base64 string
+- `vendors`
+- `vendor_profile`
+- `vendor_settings`
+- `customers`
+- `customer_vendor_profile`
+- `subscriptions`
+- `customer_subscriptions`
+- `products`
+- `orders`
+- `order_items`
+- `subscription_pauses`
+- `payments`
+- `messages`
+- `apartments`
+- `apartment_blocks`
 
-**Key management:**
-- Local dev: `private.pem` file in project root (in `.gitignore`)
-- Railway/production: `FLOW_PRIVATE_KEY` environment variable (newlines as `\n` literal)
-- Public key uploaded to Meta per phone number using `uploadPublicKey.js`
+### Newer fields / tables now in use
 
-### 5.2 Endpoint
+- `orders.delivery_charge_amount`
+- `vendor_settings.apply_delivery_charge_on_subscription`
+- `paused_orders_archive`
+- `paused_order_items_archive`
 
-- **Route:** `POST /vendor/whatsapp-flow-data`
-- **Middleware:** `express.raw({ type: "*/*" })` must run BEFORE `express.json()` (set up in `server.js`)
-- **Response:** `Content-Type: text/plain`, body = raw Base64 encrypted string
+### Subscription model
 
-### 5.3 Screens
+- `subscriptions` is the base customer-vendor subscription record.
+- `customer_subscriptions` stores per-product daily subscription quantities.
+- One customer can have multiple active daily product rows.
 
-| Action | Input | Response |
-|--------|-------|----------|
-| `ping` | Health check | `{ status: "active" }` |
-| `INIT` / `WELCOME` | First open | Return APARTMENT_ADDRESS screen + apartment list from DB |
-| `APARTMENT_ADDRESS` | User picked apartment | Return APARTMENT_BLOCK screen + blocks for that apartment |
-| Complete form | `nfm_reply` in webhook | Processed in `customerBot.js` |
+### Order model
 
-### 5.4 Multi-Vendor Support
-
-- One Flow shared across all vendors
-- `flow_token` = vendorId — used by endpoint to query correct vendor's apartments
-- No separate flow per vendor needed
-
----
-
-## 6. Backend — Vendor Dashboard API (`routes/vendorDashboard.js`)
-
-All endpoints require `?token=JWT` query parameter. Token verified via `verifyVendorToken()`.
-
-### 6.1 Auth
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/auth/vendor-link` | POST | Main vendor sends WhatsApp number → receives dashboard link via WhatsApp |
-| `/auth/login` | POST | (internal) validates JWT |
-
-Token payload: `{ vendorId, role }` — role is `admin` or `viewer`.
-
-**`requireAdmin` middleware:** blocks non-admin tokens from write operations.
-
-### 6.2 Orders
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /orders` | GET | List orders for vendor, with embedded `items` array per order |
-| `POST /orders/generate` | POST | Generate orders for today + tomorrow (calls `orderGenerator`) |
-| `PATCH /orders/:id/delivered` | PATCH | Mark order as delivered |
-| `PATCH /orders/:id/payment` | PATCH | Update payment status |
-
-**Orders response includes embedded items:**
-```json
-{
-  "order_id": 1,
-  "order_date": "2026-04-02",
-  "quantity": 2,
-  "is_delivered": false,
-  "items": [
-    { "product_name": "Milk", "unit": "L", "quantity": 1, "price_at_order": 40, "delivery_charge_at_order": 5, "order_type": "subscription" },
-    { "product_name": "Paneer", "unit": "kg", "quantity": 1, "price_at_order": 300, "delivery_charge_at_order": 0, "order_type": "adhoc" }
-  ]
-}
-```
-
-### 6.3 Customers
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /customers` | GET | List all customers with subscription status |
-| `POST /customers` | POST | Add new customer manually |
-| `PUT /customers/:id` | PUT | Update customer details |
-| `DELETE /customers/:id` | DELETE | Remove customer |
-| `GET /customers/:id/invoice` | GET | JSON invoice data with embedded order items |
-| `GET /customers/:id/invoice/pdf` | GET | PDF invoice (returns buffer) |
-
-### 6.4 Products
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /products` | GET | List vendor's products |
-| `POST /products` | POST | Add product |
-| `PUT /products/:id` | PUT | Update product (name, price, delivery_charge, unit) |
-| `DELETE /products/:id` | DELETE | Deactivate product |
-
-### 6.5 Subscriptions
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /customers/:id/subscription` | GET | Get customer's subscription and product lines |
-| `PUT /customers/:id/subscription` | PUT | Update subscription lines |
-
-### 6.6 Pauses
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /pauses` | GET | All active pauses for vendor |
-| `POST /pauses` | POST | Add pause for customer |
-| `DELETE /pauses/:id` | DELETE | Remove pause |
-
-### 6.7 Apartments & Blocks
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /apartments` | GET | List vendor's apartments |
-| `POST /apartments` | POST | Add apartment |
-| `PUT /apartments/:id` | PUT | Rename apartment |
-| `DELETE /apartments/:id` | DELETE | Remove apartment |
-| `GET /apartments/:id/blocks` | GET | List blocks in apartment |
-| `POST /apartments/:id/blocks` | POST | Add block |
-| `PUT /blocks/:id` | PUT | Rename block |
-| `DELETE /blocks/:id` | DELETE | Remove block |
-
-### 6.8 Payments
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /payments` | GET | List payments for vendor |
-| `POST /payments` | POST | Add payment (with optional screenshot upload) |
-| `DELETE /payments/:id` | DELETE | Remove payment |
-
-### 6.9 Messages Inbox
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /messages` | GET | List inbound messages (non-order) |
-| `DELETE /messages/:id` | DELETE | Clear message |
-
-**Messages are saved when:**
-1. Customer sends unrecognized input in `menu` state
-2. Customer sends message outside order window
-
-### 6.10 Settings
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `GET /settings` | GET | Get vendor settings (order window, business info) |
-| `PUT /settings` | PUT | Update settings |
-| `POST /upload-logo` | POST | Upload vendor logo (admin only) |
-
-### 6.11 Security Headers
-
-All `/vendor` routes set:
-```
-Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate
-Pragma: no-cache
-```
-This prevents mobile network carriers/proxies from caching 304 responses.
+- One `orders` row exists per customer, vendor, and delivery date.
+- `order_items` stores all product lines in that order.
+- A single order can contain:
+  - `subscription` items
+  - `adhoc` items
 
 ---
 
-## 7. Order Generation Service (`services/orderGenerator.js`)
+## 4. WhatsApp Customer Experience
 
-Called via `POST /orders/generate` or scheduled.
+### Registration and profile update
 
-**Steps:**
-1. For each target date (today + tomorrow):
-   a. Query active `customer_subscriptions` for vendor
-   b. Skip customers with active pause on that date
-   c. `INSERT INTO orders ... ON CONFLICT DO UPDATE` (won't overwrite delivered orders)
-   d. `INSERT INTO order_items` per product subscription line — snapshots `price` and `delivery_charge` at time of generation
+- Customer registration uses a WhatsApp Flow.
+- The same flow is reused for profile editing.
+- Existing profile/address values are prefilled when editing profile.
 
-**Price snapshot:** `price_at_order` and `delivery_charge_at_order` capture the price at the time the order was generated, so historical bills are correct even if prices change later.
+Prefill includes:
 
----
+- customer name
+- address type
+- apartment
+- block
+- flat number
+- manual address
 
-## 8. PDF Invoice Service (`services/invoicePDF.js`)
+### Greeting and reset
 
-Generates a professional A4 PDF using PDFKit.
+When customer sends:
 
-### 8.1 Design
-- Navy (`#0f2057`) + gold (`#f59e0b`) header bar
-- Business name, logo area (M circle), address, WhatsApp number
-- Three info boxes: Bill To (customer phone + address), Billing Period (from–to dates), Bill No
-- Data table (multi-product or legacy)
-- Total amount box (blue)
-- Footer: business name + "Generated by MilkRoute" + bill number
+- `hi`
+- `hello`
+- `start`
+- `menu`
 
-### 8.2 Multi-Product Table (if `order_items` present)
+the bot resets to the main menu state.
 
-Columns: **Date | Product (unit) | Type | Qty | Price | Del. Charge | Amount**
+`How can we help you today?` should appear only on greeting/reset menu entry, not after every completed action.
 
-- Adhoc rows highlighted yellow (`#fefce8`)
-- Subscription rows alternating white/light blue
-- Date shown only on first item row per order
-- Separator line between different dates
-- Falls back to legacy row if an order has no items
+### Main menu labels
 
-### 8.3 Legacy Table (no `order_items`)
+Current WhatsApp menu language should be:
 
-Columns: **# | Delivery Date | Packets | Rate / Packet | Amount**
+- `View Orders & Plan`
+- `Daily Subscription`
+- `Change Daily Products`
+- `Order Tomorrow`
+- `Profile`
+- `Pause Delivery`
+- `Resume Now`
+- `Get Bill`
 
-### 8.4 Total Calculation
-- Multi-product: `SUM(quantity × (price_at_order + delivery_charge_at_order))`
-- Legacy: `SUM(quantity × price_per_unit)`
-- Only **delivered** orders included
+### Free-text messages
 
-### 8.5 Bill Number Format
-`BILL-YYYYMMDD-{last 4 digits of phone}`
+If customer sends any unstructured text:
 
----
+- save it in `messages`
+- send an acknowledgement
+- show menu again
 
-## 9. Frontend — Vendor Dashboard (`vendor-dashboard/src/`)
-
-### 9.1 Access Flow
-1. Vendor sends their number via WhatsApp → receives secure link
-2. Link contains JWT token as query param (`?token=xxx`)
-3. All API calls include `?token=xxx`
-4. Token expires in 2 hours
-
-### 9.2 Pages
-
-#### Orders (`pages/Orders.jsx`)
-
-**Features:**
-- Date filter (default: today)
-- **Generate Orders button:** Calls `POST /orders/generate`, then re-fetches orders in-place (no page reload)
-- **Product Totals tiles:** Aggregated per-product totals across filtered orders
-  - Shows: product name, subscription qty, adhoc qty, total qty
-  - Computed client-side from `order.items`
-- Order cards per customer:
-  - Customer name + phone
-  - If `items` present: per-product rows with blue (subscription) / yellow (adhoc) color coding
-  - If no items: legacy Qty chip
-  - Mark Delivered button
-  - Payment status badge
-
-#### Customers (`pages/Customers.jsx`)
-
-**Features:**
-- Customer list with search
-- Add / Edit customer
-- View subscription details
-- **Bill Dialog:**
-  - Date range picker
-  - Multi-product table: Date | Product | Type | Qty | Price | Del. | Amount
-  - Legacy table if no items: Date | Qty | Rate | Amount
-  - Summary chips: deliveries count, total, amount due (red if outstanding) or "Fully Paid ✓"
-  - Correct totals from `price_at_order + delivery_charge_at_order`
-  - Adhoc rows highlighted yellow
-  - Download PDF button → calls `/customers/:id/invoice/pdf`
-
-#### Products (`pages/Products.jsx`)
-
-- List vendor's products with price and delivery charge
-- Add / Edit / Delete product
-- Unit field (e.g., "L", "kg", "pkt")
-
-#### Apartments (`pages/Apartments.jsx`)
-
-- List apartments and their blocks
-- Add / Rename / Delete apartments
-- Add / Rename / Delete blocks
-- These feed the WhatsApp Flow registration dropdown
-
-#### Blocks (`pages/Blocks.jsx`)
-
-- Standalone blocks management (alternative view)
-
-#### Pauses (`pages/Pauses.jsx`)
-
-- List all active pauses with customer name, date range
-- Add pause (select customer + date range)
-- Remove pause
-
-#### Messages (`pages/Messages.jsx`)
-
-- Inbox of non-order messages sent by customers
-- Includes: timestamp, customer name, message text
-- Shows messages from both inside and outside order window
-- Delete message option
-
-#### Settings (`pages/Settings.jsx`)
-
-- Order window start / end times
-- Business name, area, city
-- WhatsApp number display
-- Logo upload (admin only, max 5 MB image)
-
-### 9.3 Layout
-
-- **Header (`layout/Header.jsx`):** Business name, logo, current vendor info
-- **Sidebar (`layout/Sidebar.jsx`):** Navigation links to all pages
-- **Toast (`components/Toast.jsx`):** Success/error notifications
+These messages should be visible in the vendor dashboard messages page.
 
 ---
 
-## 10. Server Entry Point (`server.js`)
+## 5. WhatsApp Product Flows
 
-```
-app.use("/vendor/whatsapp-flow-data", express.raw({ type: "*/*" }))  ← MUST be before express.json()
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
-app.use("/webhook", webhookRouter)
-app.use("/vendor", vendorDashboardRouter)
-app.use(express.static("public"))
-```
+### Shared flow approach
 
-**Port:** `process.env.PORT || 3000`
+One shared Meta flow is used for both:
 
----
+- daily subscription updates
+- quick/tomorrow orders
 
-## 11. Environment Variables
+Mode comes from `flow_token`:
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PORT` | No | Server port (default 3000) |
-| `VERIFY_TOKEN` | Yes | WhatsApp webhook verification token |
-| `WHATSAPP_TOKEN` | Yes | Meta Cloud API bearer token |
-| `MAIN_VENDOR_PHONE_NUMBER_ID` | Yes | Primary vendor's phone number ID |
-| `JWT_SECRET` | Yes | Secret for signing vendor dashboard tokens |
-| `REGISTRATION_FLOW_ID` | No | ~~Not needed~~ — Flow ID is embedded in the template, not passed at send time |
-| `APP_BASE_URL` | Yes | Frontend URL (e.g. `http://localhost:5173/`) |
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Yes | DB credentials |
-| `CORS_ORIGIN` | Yes | Frontend origin for CORS |
-| `FLOW_PRIVATE_KEY` | Railway only | RSA private key as string (newlines as `\n`) |
-| `NODE_ENV` | No | `development` or `production` |
+- `vendorId:customerId:sub`
+- `vendorId:customerId:adhoc`
 
----
+### Flow screens
 
-## 12. Security
+- `PRODUCT_LIST`
+- `PRODUCT_LIST_ADHOC`
+- `SUCCESS`
 
-| Concern | Implementation |
-|---------|---------------|
-| Dashboard auth | JWT with 2h expiry; `requireAdmin` middleware for write ops |
-| WhatsApp Flow data | AES-128-GCM + RSA OAEP end-to-end encryption |
-| Private key (local) | `private.pem` in `.gitignore` — never committed |
-| Private key (Railway) | `FLOW_PRIVATE_KEY` env variable |
-| `.env` file | In `.gitignore` — never committed |
-| File uploads | MIME type whitelist (images only), 5–10 MB size limit |
-| SQL injection | All queries use parameterized `$1, $2` placeholders |
-| CORS | Restricted to `CORS_ORIGIN` env value |
+### Flow behavior
+
+- Subscription mode saves directly into `customer_subscriptions`
+- Adhoc mode stores a cart in conversation state, then customer confirms in WhatsApp
+
+### Prefill rules
+
+- Daily product flow prefills only active daily subscription quantities
+- Quick order flow prefills only existing upcoming adhoc quantities
+- First-time product selection should open blank
 
 ---
 
-## 13. File Structure (Relevant Files Only)
+## 6. Orders And Delivery Charges
 
-```
-MilkWhatsAppBot/
-├── server.js                        # Express app entry point
-├── db.js                            # PostgreSQL pool
-├── .env                             # Local secrets (gitignored)
-├── .gitignore
-├── private.pem                      # RSA private key (gitignored)
-├── public.pem                       # RSA public key (gitignored)
-├── generateKeys.js                  # One-time RSA key generation (gitignored)
-├── uploadPublicKey.js               # One-time public key upload to Meta (gitignored)
-├── bots/
-│   └── customerBot.js               # WhatsApp message handler (all conversation logic)
-├── routes/
-│   └── vendorDashboard.js           # All vendor dashboard API endpoints + Flow endpoint
-├── services/
-│   ├── orderGenerator.js            # Order + order_items generation logic
-│   ├── invoicePDF.js                # PDF generation with PDFKit
-│   ├── vendorAuth.js                # JWT sign/verify helpers
-│   └── whatsappService.js           # (if exists) WhatsApp API helpers
-└── public/
-    └── uploads/
-        ├── images/logo/             # Vendor logo files
-        └── payments/                # Payment screenshot files
+### Daily + adhoc in one order
 
-vendor-dashboard/src/
-├── App.jsx                          # Router setup
-├── main.jsx                         # Vite entry
-├── dashboard/
-│   ├── layout/
-│   │   ├── Header.jsx
-│   │   └── Sidebar.jsx
-│   └── pages/
-│       ├── Orders.jsx               # Orders list + generate + product tiles
-│       ├── Customers.jsx            # Customer list + bill dialog
-│       ├── Products.jsx
-│       ├── Apartments.jsx
-│       ├── Blocks.jsx
-│       ├── Pauses.jsx
-│       ├── Messages.jsx             # Inbox
-│       └── Settings.jsx
-└── components/
-    └── Toast.jsx
-```
+An order for a future date can contain both:
+
+- daily subscription items
+- extra/quick-order items
+
+Customer-facing display should reflect both.
+
+### Delivery charge rules
+
+Delivery charge is now order-level, not product-level.
+
+Rules:
+
+- Only one delivery charge per order
+- If a future order has both daily and quick-order items, charge once only
+- `vendor_settings.apply_delivery_charge_on_subscription` decides whether a subscription-only order should carry delivery charge
+- Adhoc/quick-order orders use the vendor order delivery charge if configured
+
+### Order creation
+
+- Daily subscription orders are generated for today and tomorrow
+- Quick orders are added into the matching upcoming `orders` row for that delivery date
+- The same order can contain both daily and extra items
 
 ---
 
-## 14. Known Pending Items
+## 7. Pause And Resume Rules
 
-| Item | Status | Notes |
-|------|--------|-------|
-| `customer_registration` template | Awaiting Meta approval (24–48 hrs) | Template submitted; once approved, test the flow end-to-end |
-| `REGISTRATION_FLOW_ID` in `.env` | Placeholder `YOUR_FLOW_ID_HERE` | Update after Meta approves the flow |
-| New vendor onboarding | Manual | When adding a new vendor: add to DB, run `uploadPublicKey.js` with their `phone_number_id`, add phone number to Meta webhook subscriptions |
-| Delivery receipt / signature | Not implemented | Future: customer confirm delivery via WhatsApp |
-| Push notifications / reminders | Not implemented | Future: remind customers before order window closes |
+### Pause behavior
+
+Pause applies to:
+
+- daily subscription deliveries
+- tomorrow/extra quick-order items
+
+Customer WhatsApp message should clearly say that all deliveries in the pause period are paused.
+
+### Paused menu behavior
+
+While paused, customer menu should show only:
+
+- `Resume Now`
+- `Profile`
+- `Get Bill`
+
+### Resume behavior
+
+On resume:
+
+- pause row is removed
+- paused upcoming orders are restored from archive
+- upcoming daily snapshot is regenerated
+- customer should again see both daily and quick upcoming items
+
+### Pause archive
+
+Pause archive tables preserve future orders through pause/resume:
+
+- `paused_orders_archive`
+- `paused_order_items_archive`
 
 ---
 
-## 15. Deployment (Railway)
+## 8. IST Timezone Policy
 
-1. Push code to GitHub (`.env`, `.pem`, `generateKeys.js`, `uploadPublicKey.js` are gitignored)
-2. Connect Railway to GitHub repo
-3. Set all environment variables in Railway dashboard (see Section 11)
-4. For `FLOW_PRIVATE_KEY`: paste the contents of `private.pem` as a single-line string with `\n` for newlines
-5. Frontend: deploy `vendor-dashboard` as a separate Railway service or Vercel
-6. Update `APP_BASE_URL` and `CORS_ORIGIN` to production URLs
+All business dates must use IST (`Asia/Kolkata`) regardless of hosting region.
+
+This applies to:
+
+- tomorrow calculations
+- pause dates
+- invoice dates
+- payment dates
+- order generation
+- customer WhatsApp messages
+- dashboard display
+
+### Backend files using IST-safe logic
+
+- `bots/customerBot.js`
+- `bots/vendorBot.js`
+- `routes/vendorDashboard.js`
+- `services/orderGenerator.js`
+- `services/invoicePDF.js`
+
+### Frontend files using IST-safe logic
+
+- `vendor-dashboard/src/utils/istDate.js`
+- `Orders.jsx`
+- `Customers.jsx`
+- `Messages.jsx`
+- `Products.jsx`
+- `Pauses.jsx`
 
 ---
 
-## 16. How to Add a New Vendor
+## 9. Billing And Outstanding
 
-1. Insert row into `vendors` table with their `phone_number_id` (from Meta)
-2. Run `uploadPublicKey.js` with their `phone_number_id` (updates Meta encryption key)
-3. Subscribe their phone number to the webhook in Meta App Dashboard
-4. Share dashboard link: `POST /auth/vendor-link` with their WhatsApp number
+### Billing rules
+
+Bills and outstanding amounts must be calculated from delivered orders and real order totals.
+
+Current rules:
+
+- use `order_items` when available
+- include `orders.delivery_charge_amount`
+- count only delivered orders in invoices
+- use payment status to determine outstanding amount
+
+### Customer bill flow
+
+Customer can request bill from WhatsApp.
+
+System sends:
+
+- summary text
+- PDF invoice
+
+### PDF invoice
+
+PDF is generated from delivered order rows and IST-safe date labels.
+
+---
+
+## 10. Vendor Dashboard Requirements
+
+### Orders page
+
+Orders page should support:
+
+- date filters
+- apartment and block filters
+- compact cards
+- row-wise expand/collapse
+- `Expand All`
+- `Collapse All`
+
+User-friendly labels should be used instead of raw internal words:
+
+- `Daily`
+- `Tomorrow`
+
+Paused future orders should not appear in the active orders list.
+
+### Customers page
+
+Customer billing and outstanding should always reflect the latest delivered values.
+
+### Products page
+
+Products support:
+
+- name
+- unit
+- price
+- order type (`subscription`, `adhoc`, `both`)
+- active status
+
+Per-product delivery charge is no longer the active total-calculation model.
+
+### Pauses page
+
+Pause page should show:
+
+- paused from
+- resumes on
+- apartment/address
+- days left / manual resume
+- apartment filter
+
+Pause dates on dashboard must match WhatsApp pause dates exactly.
+
+### Messages page
+
+Shows inbound customer free-text messages for vendor review.
+
+### Settings page
+
+Settings currently include:
+
+- delivery timings
+- order acceptance window
+- subscription delivery charge toggle
+- vendor business settings
+
+Profile updates and other maintenance actions should still be allowed outside the order acceptance window.
+
+---
+
+## 11. Key Backend Files
+
+- `server.js`
+- `bots/customerBot.js`
+- `bots/vendorBot.js`
+- `routes/vendorDashboard.js`
+- `routes/customerFlowExchange.js`
+- `services/orderGenerator.js`
+- `services/orderPricing.js`
+- `services/invoicePDF.js`
+
+---
+
+## 12. Key Frontend Files
+
+- `vendor-dashboard/src/App.jsx`
+- `vendor-dashboard/src/dashboard/pages/Orders.jsx`
+- `vendor-dashboard/src/dashboard/pages/Customers.jsx`
+- `vendor-dashboard/src/dashboard/pages/Products.jsx`
+- `vendor-dashboard/src/dashboard/pages/Pauses.jsx`
+- `vendor-dashboard/src/dashboard/pages/Messages.jsx`
+- `vendor-dashboard/src/dashboard/pages/Settings.jsx`
+- `vendor-dashboard/src/utils/istDate.js`
+
+---
+
+## 13. Important Recent Migrations
+
+These should exist in the database:
+
+- `migrations/order_level_delivery_charge.sql`
+- `migrations/ist_date_defaults_and_pause_cleanup.sql`
+- `migrations/pause_order_archive.sql`
+
+They support:
+
+- order-level delivery charges
+- IST-safe defaults
+- pause cleanup
+- pause archive and restore
+
+---
+
+## 14. Current Operational Rules
+
+- Use IST dates everywhere for customer and vendor business logic
+- One delivery charge per order
+- `View Orders & Plan` must show both daily and upcoming extra items
+- `hi` / `menu` resets state to start menu
+- Pause and resume must preserve upcoming future deliveries
+- Dashboard pause dates must match WhatsApp pause dates
+- Delivered orders drive invoices and outstanding values
+
+---
+
+## 15. Current Known Debug Area
+
+One area still under active verification during live testing:
+
+- some quick-order write/display paths depend on exact `orders` + `order_items` state and older rows in the database
+
+When debugging this area, inspect:
+
+- `orders`
+- `order_items`
+- `conversation_state.temp_data`
+- `products`
+- `subscriptions`
+- `customer_subscriptions`
