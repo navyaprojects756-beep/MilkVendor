@@ -1,4 +1,5 @@
 const express = require("express")
+const axios   = require("axios")
 const router  = express.Router()
 const pool    = require("../db")
 const { verifyVendorToken }    = require("../services/vendorAuth")
@@ -6,6 +7,7 @@ const { generateOrdersForVendor } = require("../services/orderGenerator")
 const multer  = require("multer")
 const path    = require("path")
 const fs      = require("fs")
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
 /* ─── NO-CACHE (prevents carrier/proxy 304 on mobile networks) ─── */
 router.use((_req, res, next) => {
@@ -38,6 +40,25 @@ function getISTDateStr(offsetDays = 0) {
   const istNow = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
   const date = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + offsetDays)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+async function sendVendorWhatsAppText(phoneNumberId, phone, text) {
+  const response = await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to: phone,
+      type: "text",
+      text: { body: text, preview_url: false },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    }
+  )
+  return response.data
 }
 
 async function restorePausedOrders(customerId, vendorId) {
@@ -1568,6 +1589,44 @@ router.get("/messages/thread/:phone", requireAdmin, async (req, res) => {
     res.json({ messages: rows, phone, conversation: meta.rows[0] || { phone } })
   } catch (e) {
     res.status(401).json({ message: e.message })
+  }
+})
+
+router.post("/messages/thread/:phone/reply", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const phone = decodeURIComponent(req.params.phone)
+    const text = String(req.body?.text || "").trim()
+    if (!text) return res.status(400).json({ message: "Reply text is required" })
+
+    const vendorRes = await pool.query(
+      "SELECT phone_number_id FROM vendors WHERE vendor_id = $1 LIMIT 1",
+      [vendorId]
+    )
+    const phoneNumberId = vendorRes.rows[0]?.phone_number_id
+    if (!phoneNumberId) {
+      return res.status(400).json({ message: "Vendor phone number is not configured" })
+    }
+
+    const customerRes = await pool.query(
+      "SELECT customer_id FROM customers WHERE phone = $1 LIMIT 1",
+      [phone]
+    )
+    const customerId = customerRes.rows[0]?.customer_id || null
+
+    const waRes = await sendVendorWhatsAppText(phoneNumberId, phone, text)
+    const mediaId = waRes?.messages?.[0]?.id || null
+
+    const saved = await pool.query(`
+      INSERT INTO messages (vendor_id, customer_id, phone, direction, message_type, content, media_id, is_read)
+      VALUES ($1,$2,$3,'outbound','text',$4,$5,true)
+      RETURNING message_id, direction, message_type, content, media_id, is_read, created_at
+    `, [vendorId, customerId, phone, text, mediaId])
+
+    res.json({ success: true, message: saved.rows[0] })
+  } catch (e) {
+    const details = e.response?.data?.error?.message || e.message
+    res.status(400).json({ message: details })
   }
 })
 
