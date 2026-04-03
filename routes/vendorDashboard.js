@@ -1654,8 +1654,6 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             block_id: prefill.profile?.block_id ? String(prefill.profile.block_id) : "",
             flat_number: prefill.profile?.flat_number || "",
             manual_address: prefill.profile?.manual_address || "",
-            show_welcome_error: false,
-            welcome_error: "",
           },
         }
 
@@ -1665,27 +1663,6 @@ router.post("/whatsapp-flow-data", async (req, res) => {
         const addressType  = flowData?.address_type
         const customerName = String(flowData?.customer_name || "").trim()
 
-        if (!customerName || !addressType) {
-          responsePayload = {
-            screen: "WELCOME",
-            data: {
-              customer_name: customerName,
-              address_type: addressType || "",
-              apartment_id: prefill.profile?.apartment_id ? String(prefill.profile.apartment_id) : "",
-              block_id: prefill.profile?.block_id ? String(prefill.profile.block_id) : "",
-              flat_number: prefill.profile?.flat_number || "",
-              manual_address: prefill.profile?.manual_address || "",
-              show_welcome_error: true,
-              welcome_error: !customerName && !addressType
-                ? "Please enter your name and select an address type."
-                : (!customerName ? "Please enter your name." : "Please select an address type."),
-            },
-          }
-          const encrypted = encryptFlowResponse(responsePayload, decryptedAesKey, iv)
-          res.set("Content-Type", "text/plain")
-          return res.send(encrypted)
-        }
-
         if (addressType === "apartment") {
           const selectedApartmentId = flowData?.apartment_id || (prefill.profile?.apartment_id ? String(prefill.profile.apartment_id) : "")
 
@@ -1694,8 +1671,6 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             data: {
               customer_name: customerName,
               apartment_id: selectedApartmentId,
-              show_apartment_error: false,
-              apartment_error: "",
               apartments: prefill.apartments.map((a) => ({ id: String(a.apartment_id), title: a.name })),
             },
           }
@@ -1706,8 +1681,6 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             data: {
               customer_name: customerName,
               manual_address: flowData?.manual_address || prefill.profile?.manual_address || "",
-              show_house_error: false,
-              house_error: "",
             },
           }
         }
@@ -1716,22 +1689,6 @@ router.post("/whatsapp-flow-data", async (req, res) => {
         // User selected apartment — load blocks
         const aptId = flowData?.apartment_id
         const prefill = await getRegistrationPrefill(payload.flow_token)
-        if (!aptId) {
-          responsePayload = {
-            screen: "APARTMENT_ADDRESS",
-            data: {
-              customer_name: flowData?.customer_name || prefill.customer?.name || "",
-              apartment_id: "",
-              show_apartment_error: true,
-              apartment_error: "Please select an apartment or society.",
-              apartments: prefill.apartments.map((a) => ({ id: String(a.apartment_id), title: a.name })),
-            },
-          }
-          const encrypted = encryptFlowResponse(responsePayload, decryptedAesKey, iv)
-          res.set("Content-Type", "text/plain")
-          return res.send(encrypted)
-        }
-
         const { rows: blockRows } = await pool.query(
           "SELECT block_id, block_name FROM apartment_blocks WHERE apartment_id=$1 ORDER BY block_name",
           [aptId]
@@ -1749,74 +1706,8 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             apartment_id:  aptId,
             block_id:      blockId,
             flat_number:   flatNumber,
-            show_block_error: false,
-            block_error: "",
             blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
           },
-        }
-      } else if (screen === "APARTMENT_BLOCK") {
-        const aptId = flowData?.apartment_id
-        const blockId = String(flowData?.block_id || "").trim()
-        const flatNumber = String(flowData?.flat_number || "").trim()
-        const { rows: blockRows } = await pool.query(
-          "SELECT block_id, block_name FROM apartment_blocks WHERE apartment_id=$1 ORDER BY block_name",
-          [aptId]
-        )
-
-        if (!blockId || !flatNumber) {
-          responsePayload = {
-            screen: "APARTMENT_BLOCK",
-            data: {
-              customer_name: flowData?.customer_name || "",
-              apartment_id: aptId,
-              block_id: blockId,
-              flat_number: flatNumber,
-              show_block_error: true,
-              block_error: !blockId && !flatNumber
-                ? "Please select a block and enter your flat number."
-                : (!blockId ? "Please select a block or tower." : "Please enter your flat number."),
-              blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
-            },
-          }
-        } else {
-          responsePayload = {
-            screen: "SUCCESS",
-            data: {
-              customer_name: flowData?.customer_name || "",
-              address_type: "apartment",
-              apartment_id: aptId,
-              block_id: blockId,
-              flat_number: flatNumber,
-              manual_address: "",
-            },
-          }
-        }
-      } else if (screen === "HOUSE_ADDRESS") {
-        const customerName = flowData?.customer_name || ""
-        const manualAddress = String(flowData?.manual_address || "").trim()
-
-        if (!manualAddress) {
-          responsePayload = {
-            screen: "HOUSE_ADDRESS",
-            data: {
-              customer_name: customerName,
-              manual_address: manualAddress,
-              show_house_error: true,
-              house_error: "Please enter your delivery address.",
-            },
-          }
-        } else {
-          responsePayload = {
-            screen: "SUCCESS",
-            data: {
-              customer_name: customerName,
-              address_type: "house",
-              apartment_id: "",
-              block_id: "",
-              flat_number: "",
-              manual_address: manualAddress,
-            },
-          }
         }
       }
     }
