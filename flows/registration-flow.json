@@ -8,6 +8,12 @@
     ],
     "APARTMENT_ADDRESS": [
       "APARTMENT_BLOCK"
+    ],
+    "APARTMENT_BLOCK": [
+      "SUCCESS"
+    ],
+    "HOUSE_ADDRESS": [
+      "SUCCESS"
     ]
   },
   "screens": [
@@ -38,23 +44,34 @@
         "manual_address": {
           "type": "string",
           "__example__": "Flat 101, Main Road"
+        },
+        "show_welcome_error": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "welcome_error": {
+          "type": "string",
+          "__example__": ""
         }
       },
       "layout": {
         "type": "SingleColumnLayout",
         "children": [
           {
+            "type": "TextBody",
+            "text": "${data.welcome_error}",
+            "visible": "${data.show_welcome_error}"
+          },
+          {
             "type": "TextInput",
             "name": "customer_name",
             "label": "Your Name",
-            "required": true,
             "init-value": "${data.customer_name}"
           },
           {
             "type": "RadioButtonsGroup",
             "name": "address_type",
             "label": "Address Type",
-            "required": true,
             "init-value": "${data.address_type}",
             "data-source": [
               {
@@ -95,6 +112,14 @@
           "type": "string",
           "__example__": "1"
         },
+        "show_apartment_error": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "apartment_error": {
+          "type": "string",
+          "__example__": ""
+        },
         "apartments": {
           "type": "array",
           "items": {
@@ -120,10 +145,14 @@
         "type": "SingleColumnLayout",
         "children": [
           {
+            "type": "TextBody",
+            "text": "${data.apartment_error}",
+            "visible": "${data.show_apartment_error}"
+          },
+          {
             "type": "Dropdown",
             "name": "apartment_id",
             "label": "Apartment / Society",
-            "required": true,
             "init-value": "${data.apartment_id}",
             "data-source": "${data.apartments}"
           },
@@ -162,6 +191,14 @@
           "type": "string",
           "__example__": "444"
         },
+        "show_block_error": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "block_error": {
+          "type": "string",
+          "__example__": ""
+        },
         "blocks": {
           "type": "array",
           "items": {
@@ -187,10 +224,14 @@
         "type": "SingleColumnLayout",
         "children": [
           {
+            "type": "TextBody",
+            "text": "${data.block_error}",
+            "visible": "${data.show_block_error}"
+          },
+          {
             "type": "Dropdown",
             "name": "block_id",
             "label": "Block / Tower",
-            "required": true,
             "init-value": "${data.block_id}",
             "data-source": "${data.blocks}"
           },
@@ -198,14 +239,13 @@
             "type": "TextInput",
             "name": "flat_number",
             "label": "Flat Number",
-            "required": true,
             "init-value": "${data.flat_number}"
           },
           {
             "type": "Footer",
             "label": "Submit",
             "on-click-action": {
-              "name": "complete",
+              "name": "data_exchange",
               "payload": {
                 "customer_name": "${data.customer_name}",
                 "address_type": "apartment",
@@ -230,27 +270,98 @@
         "manual_address": {
           "type": "string",
           "__example__": "Flat 101, Main Road"
+        },
+        "show_house_error": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "house_error": {
+          "type": "string",
+          "__example__": ""
         }
       },
       "layout": {
         "type": "SingleColumnLayout",
         "children": [
           {
+            "type": "TextBody",
+            "text": "${data.house_error}",
+            "visible": "${data.show_house_error}"
+          },
+          {
             "type": "TextArea",
             "name": "manual_address",
             "label": "Delivery Address",
-            "required": true,
             "init-value": "${data.manual_address}"
           },
           {
             "type": "Footer",
             "label": "Submit",
             "on-click-action": {
-              "name": "complete",
+              "name": "data_exchange",
               "payload": {
                 "customer_name": "${data.customer_name}",
                 "address_type": "house",
                 "manual_address": "${form.manual_address}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SUCCESS",
+      "title": "Submitted",
+      "terminal": true,
+      "data": {
+        "customer_name": {
+          "type": "string",
+          "__example__": "Navya"
+        },
+        "address_type": {
+          "type": "string",
+          "__example__": "apartment"
+        },
+        "apartment_id": {
+          "type": "string",
+          "__example__": "1"
+        },
+        "block_id": {
+          "type": "string",
+          "__example__": "11"
+        },
+        "flat_number": {
+          "type": "string",
+          "__example__": "444"
+        },
+        "manual_address": {
+          "type": "string",
+          "__example__": "Flat 101, Main Road"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Done!"
+          },
+          {
+            "type": "TextBody",
+            "text": "Your details are ready to submit."
+          },
+          {
+            "type": "Footer",
+            "label": "Finish",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "customer_name": "${data.customer_name}",
+                "address_type": "${data.address_type}",
+                "apartment_id": "${data.apartment_id}",
+                "block_id": "${data.block_id}",
+                "flat_number": "${data.flat_number}",
+                "manual_address": "${data.manual_address}"
               }
             }
           }

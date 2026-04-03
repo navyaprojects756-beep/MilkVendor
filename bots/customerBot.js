@@ -31,8 +31,7 @@ async function sendText(pid, phone, text) {
   })
 }
 
-// ── Send the registration flow template to a new user ──
-const REGISTRATION_TEMPLATE_NAME  = "customer_registration_v2"
+// ── Shared flow ids ──
 const PRODUCT_LIST_FLOW_ID        = process.env.PRODUCT_LIST_FLOW_ID
 
 // ── Send Product List flow as free interactive message (within 24h session) ──
@@ -84,31 +83,26 @@ async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessN
   })
 }
 
-async function sendRegistrationFlow(pid, phone, vendorId, businessName) {
+async function sendRegistrationFlow(pid, phone, vendorId, customerId, businessName) {
   await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
     to:   phone,
-    type: "template",
-    template: {
-      name:     REGISTRATION_TEMPLATE_NAME,
-      language: { code: "en" },
-      components: [
-        {
-          type: "header",
-          parameters: [{ type: "text", text: businessName || "MilkRoute" }]
-        },
-        {
-          type: "button",
-          sub_type: "flow",
-          index: "0",
-          parameters: [
-            {
-              type:   "action",
-              action: { flow_token: String(vendorId) }
-            }
-          ]
+    type: "interactive",
+    interactive: {
+      type: "flow",
+      body: {
+        text: `Welcome to *${businessName || "MilkRoute"}*!\n\nPlease complete your profile to start deliveries.`
+      },
+      action: {
+        name: "flow",
+        parameters: {
+          flow_message_version: "3",
+          flow_token: `${vendorId}:${customerId || 0}:new`,
+          flow_id: process.env.REGISTRATION_FLOW_ID,
+          flow_cta: "Register Now",
+          flow_action: "data_exchange"
         }
-      ]
+      }
     }
   })
 }
@@ -1032,7 +1026,7 @@ async function startAddressFlow(pid, phone, customerId, vendor, afterAddr = fals
       existingAddr ? formatAddress(existingAddr) : null
     )
   } else {
-    await sendRegistrationFlow(pid, phone, vendor.vendor_id, bizName)
+    await sendRegistrationFlow(pid, phone, vendor.vendor_id, customerId, bizName)
   }
   await setState(phone, "awaiting_registration", vendor.vendor_id, { after_addr: afterAddr })
 }
@@ -1235,7 +1229,7 @@ async function handleCustomerBot(msg, pid) {
         await sendText(pid, phone,
           `👋 Welcome to *${bizName}*!\n\nTo start receiving daily deliveries, please complete your account setup by tapping the button below. It only takes a minute! 🥛`
         )
-        await sendRegistrationFlow(pid, phone, vId, bizName)
+        await sendRegistrationFlow(pid, phone, vId, cId, bizName)
         await setState(phone, "awaiting_registration", vId)
         return
       }
