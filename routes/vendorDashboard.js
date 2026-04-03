@@ -42,6 +42,50 @@ function getISTDateStr(offsetDays = 0) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
 }
 
+function timeToMinutes(value) {
+  if (!value) return null
+  const [h, m] = String(value).split(":").map(Number)
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null
+  return (h * 60) + m
+}
+
+function addMinutesToTime(value, addMins) {
+  const mins = timeToMinutes(value)
+  if (mins == null) return null
+  const total = (mins + addMins + 1440) % 1440
+  const hh = String(Math.floor(total / 60)).padStart(2, "0")
+  const mm = String(total % 60).padStart(2, "0")
+  return `${hh}:${mm}`
+}
+
+function validateSchedule(profile = {}, settings = {}) {
+  const deliveryStart = timeToMinutes(profile.delivery_start)
+  const deliveryEnd = timeToMinutes(profile.delivery_end)
+  const acceptStart = timeToMinutes(profile.order_accept_start)
+  const acceptEnd = timeToMinutes(profile.order_accept_end)
+  const autoGenerate = timeToMinutes(settings.auto_generate_time)
+
+  if ((profile.delivery_start && !profile.delivery_end) || (!profile.delivery_start && profile.delivery_end)) {
+    return "Please set both delivery start and delivery end times."
+  }
+  if ((profile.order_accept_start && !profile.order_accept_end) || (!profile.order_accept_start && profile.order_accept_end)) {
+    return "Please set both order acceptance start and end times."
+  }
+  if (deliveryStart != null && deliveryEnd != null && deliveryStart >= deliveryEnd) {
+    return "Delivery end time must be after delivery start time."
+  }
+  if (acceptStart != null && acceptEnd != null && acceptStart >= acceptEnd) {
+    return "Order acceptance end time must be after order acceptance start time."
+  }
+  if (deliveryEnd != null && acceptStart != null && acceptStart <= deliveryEnd) {
+    return "Order acceptance must start after delivery end time."
+  }
+  if (settings.auto_generate_time && deliveryEnd != null && autoGenerate != null && autoGenerate < deliveryEnd) {
+    return "Daily generation time cannot be earlier than delivery end time."
+  }
+  return null
+}
+
 async function sendVendorWhatsAppText(phoneNumberId, phone, text) {
   const response = await axios.post(
     `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
@@ -597,6 +641,23 @@ router.put("/profile", requireAdmin, async (req, res) => {
       active_days,
       whatsapp_number, area, city,
     } = req.body
+    const profilePayload = {
+      delivery_start: delivery_start || null,
+      delivery_end: delivery_end || null,
+      order_accept_start: order_accept_start || null,
+      order_accept_end: order_accept_end || null,
+      active_days: active_days || [0,1,2,3,4,5,6],
+    }
+
+    const existingSettings = await pool.query(
+      "SELECT auto_generate_time FROM vendor_settings WHERE vendor_id = $1",
+      [vendorId]
+    )
+    const scheduleError = validateSchedule(profilePayload, existingSettings.rows[0] || {})
+    if (scheduleError) {
+      return res.status(400).json({ message: scheduleError })
+    }
+
 
     await pool.query(`
       INSERT INTO vendor_profile (
@@ -620,9 +681,9 @@ router.put("/profile", requireAdmin, async (req, res) => {
         updated_at         = NOW()
     `, [
       vendorId, business_name, description, logo_url,
-      delivery_start || null, delivery_end || null,
-      order_accept_start || null, order_accept_end || null,
-      active_days || [0,1,2,3,4,5,6],
+      profilePayload.delivery_start, profilePayload.delivery_end,
+      profilePayload.order_accept_start, profilePayload.order_accept_end,
+      profilePayload.active_days,
       whatsapp_number, area, city,
     ])
 
@@ -678,6 +739,17 @@ router.post("/settings", requireAdmin, async (req, res) => {
       show_phone_numbers,
       adhoc_delivery_charge,
     } = req.body
+    const profileResult = await pool.query(
+      "SELECT delivery_start, delivery_end, order_accept_start, order_accept_end, active_days FROM vendor_profile WHERE vendor_id = $1",
+      [vendorId]
+    )
+    const profilePayload = profileResult.rows[0] || {}
+    const resolvedAutoGenerateTime = auto_generate_time || addMinutesToTime(profilePayload.delivery_end, 120) || null
+    const scheduleError = validateSchedule(profilePayload, { auto_generate_time: resolvedAutoGenerateTime })
+    if (scheduleError) {
+      return res.status(400).json({ message: scheduleError })
+    }
+
 
     await pool.query(`
       INSERT INTO vendor_settings (vendor_id,
@@ -715,7 +787,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
       notify_on_delivery, notify_pending_eod,
       apply_delivery_charge_on_subscription != null ? Boolean(apply_delivery_charge_on_subscription) : null,
       max_quantity_per_order, is_active,
-      auto_generate_time || null,
+      resolvedAutoGenerateTime,
       price_per_unit        != null ? parseFloat(price_per_unit)        : null,
       show_phone_numbers    != null ? Boolean(show_phone_numbers)        : null,
       adhoc_delivery_charge != null ? parseFloat(adhoc_delivery_charge) : null,

@@ -159,7 +159,7 @@ function formatAddress(addr) {
 
 function formatDeliveryWindow(profile = {}) {
   if (!profile?.delivery_start || !profile?.delivery_end) return ""
-  return `\n🕒 Delivery Time: ${String(profile.delivery_start).slice(0, 5)} to ${String(profile.delivery_end).slice(0, 5)}`
+  return `\n🕒 Delivery Time: ${formatTime12h(profile.delivery_start)} to ${formatTime12h(profile.delivery_end)}`
 }
 
 function getOrderWindowConfig(settings = {}, profile = {}) {
@@ -194,7 +194,7 @@ function formatOrderWindowNotice(settings = {}, profile = {}) {
 
   if (cfg.start && cfg.end) {
     const daySuffix = daysText ? ` on *${daysText}*` : ""
-    return `⏰ *Order window is currently closed.*\n\nWe accept order requests from *${String(cfg.start).slice(0, 5)}* to *${String(cfg.end).slice(0, 5)}*${daySuffix}.\n\nPlease try again during the order window.`
+    return `⏰ *Order window is currently closed.*\n\nWe accept order requests from *${formatTime12h(cfg.start)}* to *${formatTime12h(cfg.end)}*${daySuffix}.\n\nPlease try again during the order window.`
   }
 
   if (daysText) {
@@ -223,6 +223,15 @@ function getISTDateStr(offsetDays = 0) {
   const ist = getISTNow()
   const date = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate() + offsetDays)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+function formatTime12h(value) {
+  if (!value) return ""
+  const [rawH, rawM] = String(value).slice(0, 5).split(":").map(Number)
+  if (!Number.isFinite(rawH) || !Number.isFinite(rawM)) return String(value).slice(0, 5)
+  const suffix = rawH >= 12 ? "PM" : "AM"
+  const hour = rawH % 12 || 12
+  return `${hour}:${String(rawM).padStart(2, "0")} ${suffix}`
 }
 
 function istTomorrowStr() {
@@ -1194,7 +1203,7 @@ async function handleCustomerBot(msg, pid) {
 
         const tom = istTomorrowStr()
         await sendButtons(pid, phone,
-          `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n📅 Delivery: ${displayDate(tom)}${timingLine}\n\nConfirm your order?`,
+          `*Order Summary*\n\n${lines}${delLine}\n\n*Total: ?${grandTotal.toFixed(2)}*\nDelivery: ${displayDate(tom)}${timingLine}\n\nConfirm your order?`,
           [
             { id: "flow_confirm_order", title: "✅ Confirm Order" },
             { id: "flow_cancel_order",  title: "❌ Cancel"        },
@@ -1430,7 +1439,7 @@ async function handleCustomerBot(msg, pid) {
 
       const upcomingOrders = await getUpcomingOrderSections(cId, vId)
       upcomingOrders.forEach((order) => {
-        text += `\n\n📅 *Upcoming Order for ${displayDate(order.orderDate)}:*\n`
+        text += `\n\n*Upcoming Order for ${displayDate(order.orderDate)}:*\n`
         order.dailyItems.forEach(item => {
           const qty = parseFloat(item.quantity || 0)
           const price = parseFloat(item.price_at_order || 0)
@@ -1476,7 +1485,7 @@ async function handleCustomerBot(msg, pid) {
       const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
                           .toLocaleString("en-IN", { month: "long", year: "numeric" })
       await sendButtons(pid, phone,
-        `🧾 *Get Bill*\n\nWhich month's bill do you need?\n\n📅 This Month: ${thisMonth}\n📅 Last Month: ${lastMonth}`,
+        `*Get Bill*\n\nWhich month's bill do you need?\n\n� This Month: ${thisMonth}\n� Last Month: ${lastMonth}`,
         [
           { id: "inv_this_month", title: "This Month" },
           { id: "inv_last_month", title: "Last Month"  },
@@ -1856,8 +1865,8 @@ async function handleCustomerBot(msg, pid) {
     if (unpaidAmount <= 0) {
       await sendText(pid, phone,
         `✅ *Bill — ${entry.label}*\n\n` +
-        `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
-        `🧾 Total: ₹${totalAmount.toFixed(2)}\n\n` +
+        `Period: ${displayDate(range.from)} ? ${displayDate(range.to)}\n` +
+
         `🎉 *This bill is fully paid!* Thank you.`
       )
       const sub   = await getSubscription(cId, vId)
@@ -1870,8 +1879,8 @@ async function handleCustomerBot(msg, pid) {
     // Some or all unpaid
     await sendButtons(pid, phone,
       `🧾 *Bill — ${entry.label}*\n\n` +
-      `📅 ${displayDate(range.from)} → ${displayDate(range.to)}\n` +
-      `💰 Total: ₹${totalAmount.toFixed(2)}\n` +
+      `Period: ${displayDate(range.from)} ? ${displayDate(range.to)}\n` +
+
       `🔴 *Amount Due: ₹${unpaidAmount.toFixed(2)}*\n\n` +
       `Already paid? Tap *Mark as Paid* and we'll record it.`,
       [
@@ -1945,8 +1954,8 @@ async function handleCustomerBot(msg, pid) {
 
     await sendText(pid, phone,
       `✅ *Payment Recorded!*\n\n` +
-      `${periodLabel ? `📅 Period: ${periodLabel}\n` : ""}` +
-      `💰 Amount: ₹${Number(totalAmount || 0).toFixed(2)}\n\n` +
+      `${periodLabel ? `Period: ${periodLabel}\n` : ""}` +
+
       `Thank you! Your vendor has been notified. 🙏`
     )
     await setState(phone, "menu", vId)
@@ -2019,7 +2028,7 @@ async function handleCustomerBot(msg, pid) {
         `✅ *Order Placed!*\n\n${itemLines}${delLine}\n\n` +
         `🧾 Total: ₹${grandTotal.toFixed(2)}\n` +
         `📍 ${formatAddress(addr)}\n` +
-        `📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! 🙏`
+        `Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! ??`
       )
 
       const sub   = await getSubscription(cId, vId)
@@ -2044,7 +2053,7 @@ async function handleCustomerBot(msg, pid) {
     const tomorrow = getISTDateStr(1)
 
     await sendButtons(pid, phone,
-      `🛒 *Order Summary*\n\n${lines}${delLine}\n\n🧾 *Total: ₹${grandTotal.toFixed(2)}*\n📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+      `*Order Summary*\n\n${lines}${delLine}\n\n*Total: ?${grandTotal.toFixed(2)}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
       [
         { id: "flow_confirm_order", title: "✅ Confirm Order" },
         { id: "flow_cancel_order",  title: "❌ Cancel"        },
@@ -2191,7 +2200,7 @@ async function handleCustomerBot(msg, pid) {
       const tomorrow = getISTDateStr(1)
 
       await sendButtons(pid, phone,
-        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: ?${grandTotal}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
         [
           { id: "adhoc_confirm", title: "✅ Confirm Order" },
           { id: "adhoc_more",    title: "➕ Add More"      },
@@ -2290,7 +2299,7 @@ async function handleCustomerBot(msg, pid) {
       const tomorrow = getISTDateStr(1)
 
       await sendButtons(pid, phone,
-        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: ?${grandTotal}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
         [
           { id: "adhoc_confirm", title: "✅ Confirm Order" },
           { id: "adhoc_more",    title: "➕ Add More"      },
@@ -2389,7 +2398,7 @@ async function handleCustomerBot(msg, pid) {
       `✅ *Order Placed!*\n\n${itemLines}${deliveryLine}\n\n` +
       `🧾 Total: ₹${grandTotal}\n` +
       `📍 ${formatAddress(addr)}\n` +
-      `📅 Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! 🙏`
+      `Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! ??`
     )
 
     const sub   = await getSubscription(cId, vId)
@@ -2447,4 +2456,6 @@ async function handleCustomerBot(msg, pid) {
 }
 
 module.exports = handleCustomerBot
+
+
 
