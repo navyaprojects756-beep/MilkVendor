@@ -93,6 +93,8 @@ The current system supports:
 - Customer registration uses a WhatsApp Flow.
 - The same flow is reused for profile editing.
 - Existing profile/address values are prefilled when editing profile.
+- Registration is now sent as a direct interactive flow message inside the active chat session.
+- Registration no longer depends on a WhatsApp template for normal in-session onboarding.
 
 Prefill includes:
 
@@ -165,6 +167,7 @@ Mode comes from `flow_token`:
 
 - Subscription mode saves directly into `customer_subscriptions`
 - Adhoc mode stores a cart in conversation state, then customer confirms in WhatsApp
+- Flow JSON can be reused across vendors when their phone numbers belong to the same WhatsApp Business Account context.
 
 ### Prefill rules
 
@@ -367,7 +370,43 @@ Profile updates and other maintenance actions should still be allowed outside th
 
 ---
 
-## 11. Key Backend Files
+## 11. Multi-Vendor WhatsApp Setup
+
+### Recommended Meta setup
+
+For this project, the preferred Meta setup is:
+
+- one WhatsApp Business Account
+- multiple phone numbers under that same account
+- one vendor mapped to one `phone_number_id`
+
+This setup makes it easier to reuse:
+
+- flows
+- templates
+- webhook setup
+- onboarding process
+
+### Vendor routing
+
+Backend routes incoming messages by `phone_number_id`.
+
+Current vendor mapping expectation:
+
+- each vendor row has its own `phone_number_id`
+- backend picks vendor by the incoming WhatsApp metadata phone number id
+
+### Template and flow notes
+
+- Direct interactive flows work inside the active 24-hour customer service window.
+- Registration currently uses direct interactive flow, not template-based sending.
+- Product selection and profile update also use direct interactive flows.
+- If business-initiated messaging is needed outside the active session window, templates are still required by Meta.
+- When phone numbers are spread across different WhatsApp account contexts, the same flow/template may need to be created there too.
+
+---
+
+## 12. Key Backend Files
 
 - `server.js`
 - `bots/customerBot.js`
@@ -380,7 +419,7 @@ Profile updates and other maintenance actions should still be allowed outside th
 
 ---
 
-## 12. Key Frontend Files
+## 13. Key Frontend Files
 
 - `vendor-dashboard/src/App.jsx`
 - `vendor-dashboard/src/dashboard/pages/Orders.jsx`
@@ -393,7 +432,7 @@ Profile updates and other maintenance actions should still be allowed outside th
 
 ---
 
-## 13. Important Recent Migrations
+## 14. Important Recent Migrations
 
 These should exist in the database:
 
@@ -410,7 +449,7 @@ They support:
 
 ---
 
-## 14. Current Operational Rules
+## 15. Current Operational Rules
 
 - Use IST dates everywhere for customer and vendor business logic
 - One delivery charge per order
@@ -422,7 +461,7 @@ They support:
 
 ---
 
-## 15. Current Known Debug Area
+## 16. Current Known Debug Area
 
 One area still under active verification during live testing:
 
