@@ -252,7 +252,7 @@ router.post("/", async (req, res) => {
         responsePayload = { data: { status: "error", message: "Invalid token" } }
       } else {
         const { data } = await buildProductScreenData(vendorId, customerId, mode)
-        responsePayload = { screen: "PRODUCT_LIST", data }
+        responsePayload = { screen: mode === "adhoc" ? "PRODUCT_LIST_ADHOC" : "PRODUCT_LIST", data }
       }
 
     /* ── data_exchange: form submitted ── */
