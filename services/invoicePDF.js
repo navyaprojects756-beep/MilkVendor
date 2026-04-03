@@ -52,12 +52,15 @@ function generateInvoicePDF(data, from, to) {
     let totalAmt = 0
     if (hasItems) {
       for (const o of delivered) {
+        const orderDelivery = parseFloat(o.delivery_charge_amount || 0)
+          || (o.items || []).reduce((sum, item) => sum + parseFloat(item.delivery_charge_at_order || 0), 0)
         for (const it of (o.items || [])) {
-          totalAmt += it.quantity * (parseFloat(it.price_at_order) + parseFloat(it.delivery_charge_at_order || 0))
+          totalAmt += it.quantity * parseFloat(it.price_at_order)
         }
+        totalAmt += orderDelivery
       }
     } else {
-      totalAmt = delivered.reduce((s, o) => s + o.quantity * rate, 0)
+      totalAmt = delivered.reduce((s, o) => s + (o.quantity * rate) + parseFloat(o.delivery_charge_amount || 0), 0)
     }
 
     const billNo  = `BILL-${from.replace(/-/g, "")}-${String(customer.phone).slice(-4)}`
@@ -163,12 +166,16 @@ function generateInvoicePDF(data, from, to) {
             doc.text("sub",                   cols[2].x + 3, y + 5, { width: cols[2].w - 6, align: cols[2].align })
             doc.text(String(o.quantity),      cols[3].x + 3, y + 5, { width: cols[3].w - 6, align: cols[3].align })
             doc.text(`Rs.${rate.toFixed(2)}`, cols[4].x + 3, y + 5, { width: cols[4].w - 6, align: cols[4].align })
-            doc.text("—",                     cols[5].x + 3, y + 5, { width: cols[5].w - 6, align: cols[5].align })
+            const orderDelivery = parseFloat(o.delivery_charge_amount || 0)
+              || (o.items || []).reduce((sum, item) => sum + parseFloat(item.delivery_charge_at_order || 0), 0)
+            doc.text(orderDelivery > 0 ? `Rs.${orderDelivery.toFixed(2)}` : "—", cols[5].x + 3, y + 5, { width: cols[5].w - 6, align: cols[5].align })
             doc.font("Helvetica-Bold")
-            doc.text(`Rs.${(o.quantity * rate).toFixed(2)}`, cols[6].x + 3, y + 5, { width: cols[6].w - 6, align: cols[6].align })
+            doc.text(`Rs.${((o.quantity * rate) + orderDelivery).toFixed(2)}`, cols[6].x + 3, y + 5, { width: cols[6].w - 6, align: cols[6].align })
             y += rowH; rowIdx++
           } else {
             // Show date on first item row, indent subsequent
+            const orderDelivery = parseFloat(o.delivery_charge_amount || 0)
+              || (o.items || []).reduce((sum, item) => sum + parseFloat(item.delivery_charge_at_order || 0), 0)
             for (let i = 0; i < items.length; i++) {
               if (y > H - 150) { doc.addPage({ margin: 0, size: "A4" }); y = 40 }
               const it   = items[i]
@@ -193,9 +200,9 @@ function generateInvoicePDF(data, from, to) {
               doc.text(String(it.quantity),            cols[3].x + 3, y + 5, { width: cols[3].w - 6, align: "center" })
               doc.fillColor(MUTED)
               doc.text(`Rs.${parseFloat(it.price_at_order).toFixed(2)}`, cols[4].x + 3, y + 5, { width: cols[4].w - 6, align: "right" })
-              const dc = parseFloat(it.delivery_charge_at_order || 0)
+              const dc = i === 0 ? orderDelivery : 0
               doc.text(dc > 0 ? `Rs.${dc.toFixed(2)}` : "—", cols[5].x + 3, y + 5, { width: cols[5].w - 6, align: "right" })
-              const amt = it.quantity * (parseFloat(it.price_at_order) + dc)
+              const amt = (it.quantity * parseFloat(it.price_at_order)) + dc
               doc.font("Helvetica-Bold").fillColor(TEXT)
               doc.text(`Rs.${amt.toFixed(2)}`, cols[6].x + 3, y + 5, { width: cols[6].w - 6, align: "right" })
               y += rowH; rowIdx++
@@ -238,7 +245,9 @@ function generateInvoicePDF(data, from, to) {
           doc.fillColor(MUTED)
           doc.text(`Rs. ${rate.toFixed(2)}`,                cols[3].x + 4, y + 6, { width: cols[3].w - 8, align: cols[3].align })
           doc.font("Helvetica-Bold").fillColor(TEXT)
-          doc.text(`Rs. ${(o.quantity * rate).toFixed(2)}`, cols[4].x + 4, y + 6, { width: cols[4].w - 8, align: cols[4].align })
+          const orderDelivery = parseFloat(o.delivery_charge_amount || 0)
+            || (o.items || []).reduce((sum, item) => sum + parseFloat(item.delivery_charge_at_order || 0), 0)
+          doc.text(`Rs. ${((o.quantity * rate) + orderDelivery).toFixed(2)}`, cols[4].x + 4, y + 6, { width: cols[4].w - 8, align: cols[4].align })
           y += rowH
         })
       }

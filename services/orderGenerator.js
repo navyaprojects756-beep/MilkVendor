@@ -1,4 +1,5 @@
 const pool = require("../db")
+const { getVendorDeliveryPolicy, refreshOrderTotals } = require("./orderPricing")
 
 /**
  * Generate orders for a vendor on a specific target date.
@@ -43,7 +44,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
       INSERT INTO order_items
         (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
       SELECT
-        o.order_id, cs.product_id, cs.quantity, p.price, p.delivery_charge, 'subscription'
+        o.order_id, cs.product_id, cs.quantity, p.price, 0, 'subscription'
       FROM customer_subscriptions cs
       JOIN subscriptions s
         ON s.customer_id = cs.customer_id AND s.vendor_id = cs.vendor_id AND s.status = 'active'
@@ -66,7 +67,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
       DO UPDATE SET
         quantity                 = EXCLUDED.quantity,
         price_at_order           = EXCLUDED.price_at_order,
-        delivery_charge_at_order = EXCLUDED.delivery_charge_at_order
+        delivery_charge_at_order = 0
     `, [vendorId, d])
 
     // ── Step 3: Remove subscription items for deactivated subscriptions ──
@@ -118,6 +119,17 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
         )
     `, [vendorId, d])
 
+    const refreshRes = await pool.query(
+      `SELECT order_id
+       FROM orders
+       WHERE vendor_id = $1 AND order_date = $2::date`,
+      [vendorId, d]
+    )
+
+    for (const row of refreshRes.rows) {
+      await refreshOrderTotals(row.order_id)
+    }
+
   } else {
     // ── LEGACY: original subscriptions-based logic ──
     await pool.query(`
@@ -159,6 +171,15 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
             AND (sp.pause_until IS NULL OR $2::date <= sp.pause_until)
         )
     `, [vendorId, d])
+
+    const policy = await getVendorDeliveryPolicy(vendorId)
+    const legacyDeliveryCharge = policy.applyOnSubscription ? policy.orderDeliveryCharge : 0
+    await pool.query(
+      `UPDATE orders
+       SET delivery_charge_amount = $3
+       WHERE vendor_id = $1 AND order_date = $2::date`,
+      [vendorId, d, legacyDeliveryCharge]
+    )
   }
 }
 

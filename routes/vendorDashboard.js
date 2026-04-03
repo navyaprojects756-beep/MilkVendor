@@ -129,6 +129,7 @@ router.get("/orders", async (req, res) => {
         o.order_id,
         o.is_delivered,
         o.delivered_at,
+        o.delivery_charge_amount,
         c.phone,
         CASE
           WHEN cv.address_type = 'apartment'
@@ -565,6 +566,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
       auto_generate_orders,
       notify_on_delivery,
       notify_pending_eod,
+      apply_delivery_charge_on_subscription,
       max_quantity_per_order,
       is_active,
       auto_generate_time,
@@ -578,11 +580,11 @@ router.post("/settings", requireAdmin, async (req, res) => {
         allow_apartments, allow_houses, allow_blocks,
         require_flat_number, allow_manual_address,
         order_window_enabled, auto_generate_orders,
-        notify_on_delivery, notify_pending_eod,
+        notify_on_delivery, notify_pending_eod, apply_delivery_charge_on_subscription,
         max_quantity_per_order, is_active,
         auto_generate_time, price_per_unit, show_phone_numbers,
         adhoc_delivery_charge, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW())
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, NOW())
       ON CONFLICT (vendor_id) DO UPDATE SET
         allow_apartments       = COALESCE($2,  vendor_settings.allow_apartments),
         allow_houses           = COALESCE($3,  vendor_settings.allow_houses),
@@ -593,12 +595,13 @@ router.post("/settings", requireAdmin, async (req, res) => {
         auto_generate_orders   = COALESCE($8,  vendor_settings.auto_generate_orders),
         notify_on_delivery     = COALESCE($9,  vendor_settings.notify_on_delivery),
         notify_pending_eod     = COALESCE($10, vendor_settings.notify_pending_eod),
-        max_quantity_per_order = COALESCE($11, vendor_settings.max_quantity_per_order),
-        is_active              = COALESCE($12, vendor_settings.is_active),
-        auto_generate_time     = COALESCE($13, vendor_settings.auto_generate_time),
-        price_per_unit         = COALESCE($14, vendor_settings.price_per_unit),
-        show_phone_numbers     = COALESCE($15, vendor_settings.show_phone_numbers),
-        adhoc_delivery_charge  = COALESCE($16, vendor_settings.adhoc_delivery_charge),
+        apply_delivery_charge_on_subscription = COALESCE($11, vendor_settings.apply_delivery_charge_on_subscription),
+        max_quantity_per_order = COALESCE($12, vendor_settings.max_quantity_per_order),
+        is_active              = COALESCE($13, vendor_settings.is_active),
+        auto_generate_time     = COALESCE($14, vendor_settings.auto_generate_time),
+        price_per_unit         = COALESCE($15, vendor_settings.price_per_unit),
+        show_phone_numbers     = COALESCE($16, vendor_settings.show_phone_numbers),
+        adhoc_delivery_charge  = COALESCE($17, vendor_settings.adhoc_delivery_charge),
         updated_at             = NOW()
     `, [
       vendorId,
@@ -606,6 +609,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
       require_flat_number, allow_manual_address,
       order_window_enabled, auto_generate_orders,
       notify_on_delivery, notify_pending_eod,
+      apply_delivery_charge_on_subscription != null ? Boolean(apply_delivery_charge_on_subscription) : null,
       max_quantity_per_order, is_active,
       auto_generate_time || null,
       price_per_unit        != null ? parseFloat(price_per_unit)        : null,
@@ -748,7 +752,7 @@ router.get("/customers/:id/invoice/pdf", requireAdmin, async (req, res) => {
         WHERE c.customer_id=$1
       `, [req.params.id, vendorId]),
       pool.query(
-        `SELECT order_id, order_date, quantity, is_delivered,
+        `SELECT order_id, order_date, quantity, is_delivered, delivery_charge_amount,
                 COALESCE(payment_status,'unpaid') AS payment_status
          FROM orders
          WHERE customer_id=$1 AND vendor_id=$2 AND order_date>=$3 AND order_date<=$4
@@ -833,7 +837,7 @@ router.get("/customers/:id/invoice", requireAdmin, async (req, res) => {
 
     const [orders, items, settings, profile] = await Promise.all([
       pool.query(`
-        SELECT order_id, order_date, quantity, is_delivered, delivered_at,
+        SELECT order_id, order_date, quantity, is_delivered, delivered_at, delivery_charge_amount,
                COALESCE(payment_status, 'unpaid') AS payment_status
         FROM orders
         WHERE customer_id = $1 AND vendor_id = $2
@@ -899,18 +903,46 @@ router.get("/payments/:customerId", requireAdmin, async (req, res) => {
       `, [req.params.customerId, vendorId]),
       pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vendorId]),
       pool.query(
-        "SELECT COALESCE(SUM(quantity),0) AS qty FROM orders WHERE customer_id=$1 AND vendor_id=$2 AND is_delivered=true",
+        `SELECT COALESCE(SUM(order_total), 0) AS total
+         FROM (
+           SELECT
+             o.order_id,
+             COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
+             + CASE
+                 WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
+                 ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
+               END AS order_total
+           FROM orders o
+           LEFT JOIN order_items oi ON oi.order_id = o.order_id
+           WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.is_delivered=true
+           GROUP BY o.order_id
+         ) totals`,
         [req.params.customerId, vendorId]
       ),
       pool.query(
-        "SELECT COALESCE(SUM(quantity),0) AS qty FROM orders WHERE customer_id=$1 AND vendor_id=$2 AND is_delivered=true AND COALESCE(payment_status,'unpaid')='unpaid'",
+        `SELECT COALESCE(SUM(order_total), 0) AS total
+         FROM (
+           SELECT
+             o.order_id,
+             COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
+             + CASE
+                 WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
+                 ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
+               END AS order_total
+           FROM orders o
+           LEFT JOIN order_items oi ON oi.order_id = o.order_id
+           WHERE o.customer_id=$1 AND o.vendor_id=$2
+             AND o.is_delivered=true
+             AND COALESCE(o.payment_status,'unpaid')='unpaid'
+           GROUP BY o.order_id
+         ) totals`,
         [req.params.customerId, vendorId]
       ),
     ])
 
     const pricePerUnit = parseFloat(settings.rows[0]?.price_per_unit || 0)
-    const totalBilled  = parseFloat(totalR.rows[0].qty) * pricePerUnit
-    const outstanding  = parseFloat(unpaidR.rows[0].qty) * pricePerUnit
+    const totalBilled  = parseFloat(totalR.rows[0].total || 0)
+    const outstanding  = parseFloat(unpaidR.rows[0].total || 0)
     const totalPaid    = totalBilled - outstanding
 
     res.json({ payments: payments.rows, totalBilled, totalPaid, outstanding, pricePerUnit })

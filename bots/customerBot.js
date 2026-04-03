@@ -3,6 +3,7 @@ const path  = require("path")
 const fs    = require("fs")
 const pool  = require("../db")
 const { generateInvoicePDF }     = require("../services/invoicePDF")
+const { refreshOrderTotals } = require("../services/orderPricing")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
@@ -417,7 +418,7 @@ async function buildAndSendInvoice(pid, phone, cId, vId, from, to) {
       WHERE c.customer_id=$1
     `, [cId, vId]),
     pool.query(
-      `SELECT order_id, order_date, quantity, is_delivered FROM orders
+      `SELECT order_id, order_date, quantity, is_delivered, delivery_charge_amount FROM orders
        WHERE customer_id=$1 AND vendor_id=$2
          AND order_date>=$3 AND order_date<=$4
        ORDER BY order_date`,
@@ -672,7 +673,7 @@ async function sendAdhocProductList(pid, phone, vendorId, cart = []) {
       title:       `${p.name}${p.unit ? ` ${p.unit}` : ""}`.slice(0, 24),
       description: (inCart
         ? `✅ In cart: ${inCart} × ₹${(p.price * inCart).toFixed(0)}`
-        : `₹${p.price}${p.delivery_charge > 0 ? ` + ₹${p.delivery_charge} del` : ""}`
+        : `₹${p.price}`
       ).slice(0, 72),
     }
   })
@@ -1046,7 +1047,7 @@ async function handleCustomerBot(msg, pid) {
       if (withProducts) {
         if (activeProdSubs.length > 0) {
           activeProdSubs.forEach(s => {
-            const dailyCost = (parseFloat(s.price) * s.quantity + parseFloat(s.delivery_charge || 0)).toFixed(0)
+            const dailyCost = (parseFloat(s.price) * s.quantity).toFixed(0)
             text += `📦 *${s.name}${s.unit ? ` (${s.unit})` : ""}* — ${s.quantity}/day · ₹${dailyCost}/day\n`
           })
         } else {
@@ -1070,7 +1071,7 @@ async function handleCustomerBot(msg, pid) {
       }
 
       const { rows: latestOrderRows } = await pool.query(`
-        SELECT o.order_date
+        SELECT o.order_date, o.delivery_charge_amount
         FROM order_items oi
         JOIN orders o ON o.order_id = oi.order_id
         WHERE o.customer_id=$1 AND o.vendor_id=$2 AND oi.order_type='adhoc'
@@ -1079,6 +1080,7 @@ async function handleCustomerBot(msg, pid) {
       `, [cId, vId])
 
       const latestAdhocDate = latestOrderRows[0]?.order_date || null
+      const latestAdhocDelivery = parseFloat(latestOrderRows[0]?.delivery_charge_amount || 0)
       let qItems = []
       if (latestAdhocDate) {
         const adhocItemsRes = await pool.query(`
@@ -1096,10 +1098,12 @@ async function handleCustomerBot(msg, pid) {
         qItems.forEach(item => {
           const qty = parseFloat(item.quantity || 0)
           const price = parseFloat(item.price_at_order || 0)
-          const delivery = parseFloat(item.delivery_charge_at_order || 0)
-          const cost = (qty * (price + delivery)).toFixed(0)
+          const cost = (qty * price).toFixed(0)
           text += `• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — ₹${cost}\n`
         })
+        text += latestAdhocDelivery > 0
+          ? `🚚 Delivery Charge — ₹${latestAdhocDelivery.toFixed(2)}\n`
+          : `🚚 Delivery — Free\n`
       }
 
       await sendText(pid, phone, text)
@@ -1413,18 +1417,36 @@ async function handleCustomerBot(msg, pid) {
         [cId, vId, range.from, range.to]
       ),
       pool.query(
-        `SELECT COALESCE(SUM(oi.quantity * (oi.price_at_order + COALESCE(oi.delivery_charge_at_order,0))), 0) AS total
-         FROM order_items oi
-         JOIN orders o ON o.order_id = oi.order_id
-         WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date>=$3 AND o.order_date<=$4 AND o.is_delivered=true`,
+        `SELECT COALESCE(SUM(order_total), 0) AS total
+         FROM (
+           SELECT o.order_id,
+                  COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
+                  + CASE
+                      WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
+                      ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
+                    END AS order_total
+           FROM orders o
+           LEFT JOIN order_items oi ON oi.order_id = o.order_id
+           WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date>=$3 AND o.order_date<=$4 AND o.is_delivered=true
+           GROUP BY o.order_id
+         ) totals`,
         [cId, vId, range.from, range.to]
       ),
       pool.query(
-        `SELECT COALESCE(SUM(oi.quantity * (oi.price_at_order + COALESCE(oi.delivery_charge_at_order,0))), 0) AS total
-         FROM order_items oi
-         JOIN orders o ON o.order_id = oi.order_id
-         WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date>=$3 AND o.order_date<=$4
-           AND o.is_delivered=true AND COALESCE(o.payment_status,'unpaid')='unpaid'`,
+        `SELECT COALESCE(SUM(order_total), 0) AS total
+         FROM (
+           SELECT o.order_id,
+                  COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
+                  + CASE
+                      WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
+                      ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
+                    END AS order_total
+           FROM orders o
+           LEFT JOIN order_items oi ON oi.order_id = o.order_id
+           WHERE o.customer_id=$1 AND o.vendor_id=$2 AND o.order_date>=$3 AND o.order_date<=$4
+             AND o.is_delivered=true AND COALESCE(o.payment_status,'unpaid')='unpaid'
+           GROUP BY o.order_id
+         ) totals`,
         [cId, vId, range.from, range.to]
       ),
       pool.query("SELECT price_per_unit FROM vendor_settings WHERE vendor_id=$1", [vId]),
@@ -1606,23 +1628,18 @@ async function handleCustomerBot(msg, pid) {
       `, [cId, vId, tomorrow])
       const orderId = orderRows[0].order_id
 
-      // Delivery charge applied once to the first item
       for (let idx = 0; idx < cart.length; idx++) {
         const item = cart[idx]
-        const dc   = idx === 0 ? delCharge : 0
         await pool.query(`
           INSERT INTO order_items
             (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
           VALUES ($1,$2,$3,$4,$5,'adhoc')
           ON CONFLICT (order_id, product_id)
           DO UPDATE SET quantity=$3, price_at_order=$4, delivery_charge_at_order=$5, order_type='adhoc'
-        `, [orderId, item.product_id, item.qty, item.price, dc])
+        `, [orderId, item.product_id, item.qty, item.price, 0])
       }
 
-      await pool.query(`
-        UPDATE orders SET quantity = (SELECT COALESCE(SUM(quantity),0) FROM order_items WHERE order_id=$1)
-        WHERE order_id = $1
-      `, [orderId])
+      await refreshOrderTotals(orderId)
 
       const addr       = await getAddress(cId, vId)
       const itemTotal  = cart.reduce((s, i) => s + i.price * i.qty, 0)
@@ -1690,7 +1707,7 @@ async function handleCustomerBot(msg, pid) {
       const current = customerSubs.find(s => s.product_id === productId)
       const currentQty = (current && current.is_active) ? current.quantity : 0
 
-      const priceInfo = `₹${product.price}${product.delivery_charge > 0 ? ` + ₹${product.delivery_charge} delivery` : ""}`
+      const priceInfo = `₹${product.price}`
       const currentInfo = currentQty > 0
         ? `Currently: *${currentQty}/day* (₹${(product.price * currentQty).toFixed(0)}/day)`
         : `Currently: *not subscribed*`
@@ -1705,7 +1722,7 @@ async function handleCustomerBot(msg, pid) {
         product_name:    product.name,
         product_unit:    product.unit,
         price:           product.price,
-        delivery_charge: product.delivery_charge,
+        delivery_charge: 0,
       })
       return
     }
@@ -1790,18 +1807,20 @@ async function handleCustomerBot(msg, pid) {
 
     // "Place Order" — confirm everything in cart
     if (input === "adhoc_place_order") {
+      const deliveryCharge = parseFloat(settings.adhoc_delivery_charge || 0)
       if (cart.length === 0) {
         await sendText(pid, phone, "⚠️ Your cart is empty. Please select a product first.")
         return
       }
       // Build summary and go to confirm state
       const lines = cart.map(item =>
-        `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — ₹${(item.price * item.qty + (item.delivery_charge || 0)).toFixed(2)}`
+        `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — ₹${(item.price * item.qty).toFixed(2)}`
       ).join("\n")
-      const grandTotal = cart.reduce((s, item) => s + item.price * item.qty + (item.delivery_charge || 0), 0).toFixed(2)
+      const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + deliveryCharge).toFixed(2)
+      const deliveryLine = deliveryCharge > 0 ? `\n🚚 Delivery: ₹${deliveryCharge.toFixed(2)}` : `\n🚚 Delivery: Free`
 
       await sendButtons(pid, phone,
-        `🛒 *Order Summary*\n\n${lines}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: tomorrow\n\nConfirm your order?`,
+        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: tomorrow\n\nConfirm your order?`,
         [
           { id: "adhoc_confirm", title: "✅ Confirm Order" },
           { id: "adhoc_more",    title: "➕ Add More"      },
@@ -1819,7 +1838,7 @@ async function handleCustomerBot(msg, pid) {
 
       await sendText(pid, phone,
         `🛒 *${product.name}${product.unit ? ` (${product.unit})` : ""}*\n` +
-        `💰 ₹${product.price}${product.delivery_charge > 0 ? ` + ₹${product.delivery_charge} delivery` : ""}\n\n` +
+        `💰 ₹${product.price}\n\n` +
         `How many? (enter a number, e.g. 1, 2, 3)`
       )
       await setState(phone, "adhoc_qty", vId, {
@@ -1828,7 +1847,7 @@ async function handleCustomerBot(msg, pid) {
         product_name:    product.name,
         product_unit:    product.unit || "",
         price:           parseFloat(product.price),
-        delivery_charge: parseFloat(product.delivery_charge || 0),
+        delivery_charge: 0,
       })
       return
     }
@@ -1890,13 +1909,15 @@ async function handleCustomerBot(msg, pid) {
     }
 
     if (input === "adhoc_place_order") {
+      const deliveryCharge = parseFloat(settings.adhoc_delivery_charge || 0)
       const lines = cart.map(item =>
-        `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — ₹${(item.price * item.qty + (item.delivery_charge || 0)).toFixed(2)}`
+        `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — ₹${(item.price * item.qty).toFixed(2)}`
       ).join("\n")
-      const grandTotal = cart.reduce((s, item) => s + item.price * item.qty + (item.delivery_charge || 0), 0).toFixed(2)
+      const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + deliveryCharge).toFixed(2)
+      const deliveryLine = deliveryCharge > 0 ? `\n🚚 Delivery: ₹${deliveryCharge.toFixed(2)}` : `\n🚚 Delivery: Free`
 
       await sendButtons(pid, phone,
-        `🛒 *Order Summary*\n\n${lines}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: tomorrow\n\nConfirm your order?`,
+        `🛒 *Order Summary*\n\n${lines}${deliveryLine}\n\n🧾 *Total: ₹${grandTotal}*\n📅 Delivery: tomorrow\n\nConfirm your order?`,
         [
           { id: "adhoc_confirm", title: "✅ Confirm Order" },
           { id: "adhoc_more",    title: "➕ Add More"      },
@@ -1964,24 +1985,25 @@ async function handleCustomerBot(msg, pid) {
         VALUES ($1,$2,$3,$4,$5,'adhoc')
         ON CONFLICT (order_id, product_id)
         DO UPDATE SET quantity = order_items.quantity + EXCLUDED.quantity
-      `, [orderId, item.product_id, item.qty, item.price, item.delivery_charge || 0])
+      `, [orderId, item.product_id, item.qty, item.price, 0])
     }
 
-    // Update order total quantity
-    await pool.query(`
-      UPDATE orders SET quantity = (
-        SELECT COALESCE(SUM(quantity), 0) FROM order_items WHERE order_id = $1
-      ) WHERE order_id = $1
-    `, [orderId])
+    await refreshOrderTotals(orderId)
 
     const addr      = await getAddress(cId, vId)
-    const grandTotal = cart.reduce((s, item) => s + item.price * item.qty + (item.delivery_charge || 0), 0).toFixed(2)
+    const { rows: orderAfterRows } = await pool.query(
+      "SELECT delivery_charge_amount FROM orders WHERE order_id = $1",
+      [orderId]
+    )
+    const orderDelivery = parseFloat(orderAfterRows[0]?.delivery_charge_amount || 0)
+    const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + orderDelivery).toFixed(2)
     const itemLines  = cart.map(item =>
       `📦 ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
     ).join("\n")
+    const deliveryLine = orderDelivery > 0 ? `\n🚚 Delivery: ₹${orderDelivery.toFixed(2)}` : `\n🚚 Delivery: Free`
 
     await sendText(pid, phone,
-      `✅ *Order Placed!*\n\n${itemLines}\n\n` +
+      `✅ *Order Placed!*\n\n${itemLines}${deliveryLine}\n\n` +
       `🧾 Total: ₹${grandTotal}\n` +
       `📍 ${formatAddress(addr)}\n` +
       `📅 Delivery: tomorrow\n\nThank you! 🙏`
