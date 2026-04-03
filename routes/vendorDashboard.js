@@ -200,7 +200,9 @@ router.get("/orders", async (req, res) => {
         o.is_delivered,
         o.delivered_at,
         o.delivery_charge_amount,
+        c.name AS customer_name,
         c.phone,
+        cv.address_type,
         CASE
           WHEN cv.address_type = 'apartment'
           THEN a.name || ', ' || a.address || ' - ' || b.block_name || ' - ' || cv.flat_number
@@ -208,6 +210,7 @@ router.get("/orders", async (req, res) => {
         END AS address,
         o.quantity,
         o.order_date,
+        a.name   AS apartment_name,
         a.name   AS apartment,
         b.block_name,
         COALESCE(
@@ -243,7 +246,7 @@ router.get("/orders", async (req, res) => {
               AND (sp.pause_until IS NULL OR o.order_date <= sp.pause_until)
           )
         )
-      GROUP BY o.order_id, o.is_delivered, o.delivered_at, c.phone,
+      GROUP BY o.order_id, o.is_delivered, o.delivered_at, c.name, c.phone,
                cv.address_type, a.name, a.address, b.block_name, cv.flat_number,
                cv.manual_address, o.quantity, o.order_date
       ORDER BY o.order_date DESC
@@ -780,6 +783,7 @@ router.get("/customers", requireAdmin, async (req, res) => {
     const data = await pool.query(`
       SELECT
         c.customer_id,
+        c.name AS customer_name,
         c.phone,
         cv.address_type,
         cv.flat_number,
@@ -1183,6 +1187,7 @@ router.get("/pauses", requireAdmin, async (req, res) => {
         sp.pause_from::text AS pause_from,
         sp.pause_until::text AS pause_until,
         sp.created_at,
+        c.name AS customer_name,
         c.phone,
         cv.address_type,
         cv.flat_number,
@@ -1456,9 +1461,28 @@ router.get("/messages", requireAdmin, async (req, res) => {
       SELECT DISTINCT ON (m.phone)
         m.message_id, m.phone, m.content, m.message_type, m.direction,
         m.created_at, m.is_read, m.customer_id,
-        c.phone AS customer_phone
+        c.phone AS customer_phone,
+        c.name AS customer_name,
+        cv.address_type,
+        cv.flat_number,
+        cv.manual_address,
+        a.name AS apartment_name,
+        b.block_name,
+        CASE
+          WHEN cv.address_type = 'apartment'
+          THEN a.name
+            || COALESCE(' - ' || b.block_name, '')
+            || COALESCE(' - Flat ' || cv.flat_number, '')
+          ELSE COALESCE(cv.manual_address, '')
+        END AS address
       FROM messages m
-      LEFT JOIN customers c ON c.customer_id = m.customer_id
+      LEFT JOIN customers c
+        ON c.customer_id = m.customer_id
+        OR (m.customer_id IS NULL AND c.phone = m.phone)
+      LEFT JOIN customer_vendor_profile cv
+        ON cv.customer_id = c.customer_id AND cv.vendor_id = $1
+      LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
+      LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
       WHERE m.vendor_id = $1
       ORDER BY m.phone, m.created_at DESC
     `, [vendorId])
@@ -1515,7 +1539,33 @@ router.get("/messages/thread/:phone", requireAdmin, async (req, res) => {
       [vendorId, phone]
     )
 
-    res.json({ messages: rows, phone })
+    const meta = await pool.query(`
+      SELECT
+        c.customer_id,
+        c.name AS customer_name,
+        c.phone,
+        cv.address_type,
+        cv.flat_number,
+        cv.manual_address,
+        a.name AS apartment_name,
+        b.block_name,
+        CASE
+          WHEN cv.address_type = 'apartment'
+          THEN a.name
+            || COALESCE(' - ' || b.block_name, '')
+            || COALESCE(' - Flat ' || cv.flat_number, '')
+          ELSE COALESCE(cv.manual_address, '')
+        END AS address
+      FROM customers c
+      LEFT JOIN customer_vendor_profile cv
+        ON cv.customer_id = c.customer_id AND cv.vendor_id = $1
+      LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
+      LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
+      WHERE c.phone = $2
+      LIMIT 1
+    `, [vendorId, phone])
+
+    res.json({ messages: rows, phone, conversation: meta.rows[0] || { phone } })
   } catch (e) {
     res.status(401).json({ message: e.message })
   }
