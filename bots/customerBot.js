@@ -554,7 +554,7 @@ async function cleanupTodaySubscriptionOrders(cId, vId) {
       AND o.vendor_id = $2
       AND o.order_date = $3::date
       AND o.is_delivered = false
-      AND o.created_at::date = $3::date
+      AND o.created_on::date = $3::date
       AND oi.order_type = 'subscription'
   `, [cId, vId, today])
 
@@ -564,7 +564,7 @@ async function cleanupTodaySubscriptionOrders(cId, vId) {
       AND o.vendor_id = $2
       AND o.order_date = $3::date
       AND o.is_delivered = false
-      AND o.created_at::date = $3::date
+      AND o.created_on::date = $3::date
       AND NOT EXISTS (
         SELECT 1 FROM order_items oi WHERE oi.order_id = o.order_id
       )
@@ -581,7 +581,7 @@ async function cleanupTodayAdhocOrders(cId, vId) {
       AND o.vendor_id = $2
       AND o.order_date = $3::date
       AND o.is_delivered = false
-      AND o.created_at::date = $3::date
+      AND o.created_on::date = $3::date
       AND oi.order_type = 'adhoc'
   `, [cId, vId, today])
 
@@ -591,7 +591,7 @@ async function cleanupTodayAdhocOrders(cId, vId) {
       AND o.vendor_id = $2
       AND o.order_date = $3::date
       AND o.is_delivered = false
-      AND o.created_at::date = $3::date
+      AND o.created_on::date = $3::date
       AND NOT EXISTS (
         SELECT 1 FROM order_items oi WHERE oi.order_id = o.order_id
       )
