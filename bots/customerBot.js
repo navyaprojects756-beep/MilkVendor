@@ -172,9 +172,27 @@ function formatAddress(addr) {
   return addr.manual_address || "Not set"
 }
 
+function formatTime12(value) {
+  if (!value) return ""
+  const [hourRaw, minuteRaw] = String(value).split(":")
+  const hour = Number(hourRaw)
+  const minute = Number(minuteRaw)
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return String(value)
+  const period = hour >= 12 ? "PM" : "AM"
+  const hour12 = ((hour + 11) % 12) + 1
+  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`
+}
+
+function formatActiveDays(activeDays = []) {
+  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+  const normalized = (activeDays || []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6)
+  const days = normalized.length ? normalized : [0, 1, 2, 3, 4, 5, 6]
+  return days.map((d) => labels[d]).join(", ")
+}
+
 function formatDeliveryWindow(profile = {}) {
   if (!profile?.delivery_start || !profile?.delivery_end) return ""
-  return `\nDelivery Time: ${String(profile.delivery_start).slice(0, 5)} to ${String(profile.delivery_end).slice(0, 5)}`
+  return `\nDelivery Time: ${formatTime12(profile.delivery_start)} to ${formatTime12(profile.delivery_end)}`
 }
 
 function isOrderWindowOpen(settings) {
@@ -271,7 +289,7 @@ async function getCustomerProductSubs(cId, vId) {
 }
 
 async function getUpcomingAdhocOrders(cId, vId, restored = null) {
-  const today = getISTDateStr(0)
+  const tomorrow = getISTDateStr(1)
   const liveRes = await pool.query(
     `SELECT o.order_id, o.order_date, COALESCE(o.delivery_charge_amount, 0) AS delivery_charge_amount,
             oi.quantity, oi.price_at_order, oi.delivery_charge_at_order,
@@ -285,7 +303,7 @@ async function getUpcomingAdhocOrders(cId, vId, restored = null) {
        AND o.order_date >= $3
        AND oi.order_type='adhoc'
      ORDER BY o.order_date ASC, p.sort_order, p.product_id`,
-    [cId, vId, today]
+    [cId, vId, tomorrow]
   )
 
   if (liveRes.rows.length) {
@@ -337,7 +355,7 @@ async function getUpcomingAdhocOrders(cId, vId, restored = null) {
 }
 
 async function getUpcomingOrderSections(cId, vId) {
-  const today = getISTDateStr(0)
+  const tomorrow = getISTDateStr(1)
   const res = await pool.query(
     `SELECT
        o.order_date,
@@ -358,7 +376,7 @@ async function getUpcomingOrderSections(cId, vId) {
        AND COALESCE(o.is_delivered, false)=false
        AND o.order_date >= $3
      ORDER BY o.order_date ASC, CASE WHEN COALESCE(oi.order_type, 'subscription')='subscription' THEN 0 ELSE 1 END, p.sort_order, oi.product_id`,
-    [cId, vId, today]
+    [cId, vId, tomorrow]
   )
 
   const sections = []
@@ -881,8 +899,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     }
   } else if (sub.status === "active" && pause) {
     const details = pause.pause_until
-      ? `? Delivery paused from *${displayDate(pause.pause_from)}* to *${displayDate(pause.pause_until)}*.\n\nAll deliveries in this period, including daily subscription and tomorrow orders, are paused.`
-      : `? Delivery paused from *${displayDate(pause.pause_from)}* until you resume.\n\nAll deliveries from this date onward, including daily subscription and tomorrow orders, are paused.`
+      ? `Delivery paused from *${displayDate(pause.pause_from)}* to *${displayDate(pause.pause_until)}*.\n\nAll deliveries in this period, including daily subscription and tomorrow orders, are paused.`
+      : `Delivery paused from *${displayDate(pause.pause_from)}* until you resume.\n\nAll deliveries from this date onward, including daily subscription and tomorrow orders, are paused.`
     header = `*${name}*\n\n${details}`
     rows = [
       { id: "resume_pause", title: "Resume Now",         description: "End pause & restart delivery"  },
@@ -936,7 +954,7 @@ async function sendQtyMenu(pid, phone, prefix, maxQty = 5, price = 0) {
 
 async function sendPauseMenu(pid, phone) {
   await sendList(pid, phone,
-    "? *Pause Delivery*\n\nHow long would you like to pause your delivery?",
+    "*Pause Delivery*\n\nHow long would you like to pause your delivery?",
     [
       { id: "pause_1",   title: "1 Day",           description: "Skip tomorrow's delivery only" },
       { id: "pause_2",   title: "2 Days",           description: "Skip next 2 days"              },
@@ -947,7 +965,7 @@ async function sendPauseMenu(pid, phone) {
       { id: "pause_7",   title: "1 Week",           description: "Skip next 7 days"              },
       { id: "pause_14",  title: "2 Weeks",          description: "Skip next 14 days"             },
       { id: "pause_30",  title: "1 Month",          description: "Skip next 30 days"             },
-      { id: "pause_now", title: "? Until I Resume", description: "No end date — resume manually" }
+      { id: "pause_now", title: "Until I Resume", description: "No end date — resume manually" }
     ],
     "Select"
   )
@@ -1049,10 +1067,10 @@ async function confirmQty(pid, phone, cId, vId, qty, price, profile, withProduct
   const addr  = await getAddress(cId, vId)
   const pause = await getActivePause(cId, vId)
 
-  let confirm = `? *Subscription Confirmed!*\n\n`
+  let confirm = `*Subscription Confirmed!*\n\n`
   confirm += `*${qty} packet${qty > 1 ? "s" : ""}* × 500ml delivered every day\n`
   if (price > 0) confirm += `Rs.${price * qty}/day\n`
-  confirm += `${formatAddress(addr)}\n\nDelivery starts tomorrow! `
+  confirm += `${formatAddress(addr)}\n\nYour delivery will start tomorrow${profile?.delivery_start && profile?.delivery_end ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.`
 
   await sendText(pid, phone, confirm)
   const s = await getSubscription(cId, vId)
@@ -1166,8 +1184,8 @@ async function handleCustomerBot(msg, pid) {
         await sendButtons(pid, phone,
           `*Order Summary*\n\n${lines}${delLine}\n\n*Total: Rs.${grandTotal.toFixed(2)}*\nDelivery: ${displayDate(tom)}${timingLine}\n\nConfirm your order?`,
           [
-            { id: "flow_confirm_order", title: "? Confirm Order" },
-            { id: "flow_cancel_order",  title: "? Cancel"        },
+            { id: "flow_confirm_order", title: "Confirm Order" },
+            { id: "flow_cancel_order",  title: "Cancel"        },
           ]
         )
         await setState(phone, "flow_adhoc_confirm", vId, {
@@ -1183,8 +1201,8 @@ async function handleCustomerBot(msg, pid) {
       const sub        = await getSubscription(cId, vId)
       const pause      = await getActivePause(cId, vId)
       const confirmMsg = subSaved
-        ? `? *Products updated!*\n\nYour daily subscriptions have been saved. `
-        : `? *No changes detected.*\n\nYour subscriptions remain the same.`
+        ? `*Products updated!*\n\nYour daily subscriptions have been saved.`
+        : `*No changes detected.*\n\nYour subscriptions remain the same.`
       await sendText(pid, phone, confirmMsg)
       await setState(phone, "menu", vId)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -1272,8 +1290,9 @@ async function handleCustomerBot(msg, pid) {
       if (!isOrderWindowOpen(settings)) {
         const s = settings.order_accept_start || "—"
         const e = settings.order_accept_end   || "—"
+        const days = formatActiveDays(settings.active_days)
         await sendText(pid, phone,
-          `? *Order window is currently closed.*\n\nWe accept messages from *${s}* to *${e}*.\n\nChanges can only be made during order hours.`
+          `*Order window is currently closed.*\n\nWe accept order updates from *${formatTime12(s)}* to *${formatTime12(e)}* on *${days}*.\n\nChanges can only be made during these hours.`
         )
       }
     }
@@ -1371,15 +1390,15 @@ async function handleCustomerBot(msg, pid) {
         text += `No active daily subscription.\n`
       }
 
-      text += `\n*Address:* ${formatAddress(addr)}\n`
+      text += `\nAddress: ${formatAddress(addr)}\n`
       if (sub && pause) {
         text += pause.pause_until
-          ? `\n? *Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}*`
-          : `\n? *Paused (manual resume)*`
+          ? `\nStatus: Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}`
+          : `\nStatus: Paused until you resume`
       } else if (sub) {
-        text += `\n? *Status:* Active`
+        text += `\nStatus: Active`
       } else {
-        text += `\n*No daily subscription active*`
+        text += `\nNo daily subscription active`
       }
 
       const upcomingOrders = await getUpcomingOrderSections(cId, vId)
@@ -1398,8 +1417,8 @@ async function handleCustomerBot(msg, pid) {
           text += `• [Extra] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — Rs.${cost}\n`
         })
         text += order.deliveryCharge > 0
-          ? `Delivery Charge — Rs.${order.deliveryCharge.toFixed(2)}\n`
-          : `Delivery — Free\n`
+          ? `Delivery Charge - Rs.${order.deliveryCharge.toFixed(2)}\n`
+          : `Delivery - Free\n`
       })
 
       await sendText(pid, phone, text)
@@ -1456,7 +1475,7 @@ async function handleCustomerBot(msg, pid) {
     if (input === "resume_pause") {
       if (pause) await deletePause(pause.pause_id)
       const restored = await restorePausedOrders(cId, vId)
-      await generateOrdersForVendor(vId)
+      await generateOrdersForVendor(vId, { includeToday: false, includeTomorrow: true })
       const resumeSummary = await buildResumeSummary(cId, vId, withProducts, restored)
       await sendText(
         pid,
@@ -1711,7 +1730,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     const range = getInvoiceDateRange(entry.key)
-    await sendText(pid, phone, `? Generating your bill, please wait…`)
+    await sendText(pid, phone, `Generating your bill, please wait...`)
 
     // Calculate totals — use order_items if available, else fall back to quantity × price_per_unit
     const [deliveredR, itemsTotalR, itemsUnpaidR, settingsR] = await Promise.all([
@@ -1799,8 +1818,8 @@ async function handleCustomerBot(msg, pid) {
     // All already paid
     if (unpaidAmount <= 0) {
       await sendText(pid, phone,
-        `? *Bill — ${entry.label}*\n\n` +
-        `${displayDate(range.from)} ? ${displayDate(range.to)}\n` +
+        `*Bill - ${entry.label}*\n\n` +
+        `${displayDate(range.from)} to ${displayDate(range.to)}\n` +
         `Total: Rs.${totalAmount.toFixed(2)}\n\n` +
         `*This bill is fully paid!* Thank you.`
       )
@@ -1813,8 +1832,8 @@ async function handleCustomerBot(msg, pid) {
 
     // Some or all unpaid
     await sendButtons(pid, phone,
-      `*Bill — ${entry.label}*\n\n` +
-      `${displayDate(range.from)} ? ${displayDate(range.to)}\n` +
+      `*Bill - ${entry.label}*\n\n` +
+      `${displayDate(range.from)} to ${displayDate(range.to)}\n` +
       `Total: Rs.${totalAmount.toFixed(2)}\n` +
       `*Amount Due: Rs.${unpaidAmount.toFixed(2)}*\n\n` +
       `Already paid? Tap *Mark as Paid* and we'll record it.`,
@@ -1900,7 +1919,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     await sendText(pid, phone,
-      `? *Payment Recorded!*\n\n` +
+      `*Payment Recorded!*\n\n` +
       `${periodLabel ? `Period: ${periodLabel}\n` : ""}` +
       `Amount: Rs.${Number(totalAmount || 0).toFixed(2)}\n\n` +
       `Thank you! Your vendor has been notified. `
@@ -1916,7 +1935,7 @@ async function handleCustomerBot(msg, pid) {
     const delCharge = parseFloat(state.temp_data?.flow_delivery_charge || 0)
 
     if (input === "flow_cancel_order") {
-      await sendText(pid, phone, "? *Order cancelled.* No order has been placed.")
+      await sendText(pid, phone, "*Order cancelled.* No order has been placed.")
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
@@ -1967,10 +1986,10 @@ async function handleCustomerBot(msg, pid) {
       const timingLine = formatDeliveryWindow(profile)
 
       await sendText(pid, phone,
-        `? *Order Placed!*\n\n${itemLines}${delLine}\n\n` +
+        `*Order Placed!*\n\n${itemLines}${delLine}\n\n` +
         `Total: Rs.${grandTotal.toFixed(2)}\n` +
         `${formatAddress(addr)}\n` +
-        `Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! `
+        `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
       )
 
       const sub   = await getSubscription(cId, vId)
@@ -1997,8 +2016,8 @@ async function handleCustomerBot(msg, pid) {
     await sendButtons(pid, phone,
       `*Order Summary*\n\n${lines}${delLine}\n\n*Total: Rs.${grandTotal.toFixed(2)}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
       [
-        { id: "flow_confirm_order", title: "? Confirm Order" },
-        { id: "flow_cancel_order",  title: "? Cancel"        },
+        { id: "flow_confirm_order", title: "Confirm Order" },
+        { id: "flow_cancel_order",  title: "Cancel"        },
       ]
     )
     return
@@ -2072,7 +2091,7 @@ async function handleCustomerBot(msg, pid) {
         WHERE customer_id=$1 AND vendor_id=$2 AND product_id=$3
       `, [cId, vId, product_id])
       await sendText(pid, phone,
-        `? *${product_name}${product_unit ? ` (${product_unit})` : ""}* removed from your daily order.`
+        `*${product_name}${product_unit ? ` (${product_unit})` : ""}* removed from your daily order.`
       )
     } else {
       // Upsert product subscription
@@ -2091,7 +2110,7 @@ async function handleCustomerBot(msg, pid) {
 
       const dailyCost = (parseFloat(price) * qty).toFixed(0)
       await sendText(pid, phone,
-        `? *${product_name}${product_unit ? ` (${product_unit})` : ""}* — *${qty}/day*\n` +
+        `*${product_name}${product_unit ? ` (${product_unit})` : ""}* — *${qty}/day*\n` +
         `Rs.${dailyCost}/day\n\nDelivery starts tomorrow! `
       )
     }
@@ -2103,7 +2122,7 @@ async function handleCustomerBot(msg, pid) {
     customerSubs.forEach(s => { subMap[s.product_id] = s })
     const rows = products.map(p => {
       const cs = subMap[p.product_id]
-      const status = (cs && cs.is_active) ? `? ${cs.quantity}/day` : `? Not subscribed`
+      const status = (cs && cs.is_active) ? `${cs.quantity}/day` : `Not subscribed`
       return { id: `prd_${p.product_id}`, title: `${p.name}${p.unit ? ` ${p.unit}` : ""}`.slice(0, 24), description: status }
     })
     rows.push({ id: "menu", title: "Main Menu" })
@@ -2142,10 +2161,10 @@ async function handleCustomerBot(msg, pid) {
       const tomorrow = getISTDateStr(1)
 
       await sendButtons(pid, phone,
-        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\nDelivery Date: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
         [
-          { id: "adhoc_confirm", title: "? Confirm Order" },
-          { id: "adhoc_more",    title: "? Add More"      },
+          { id: "adhoc_confirm", title: "Confirm Order" },
+          { id: "adhoc_more",    title: "Add More"      },
         ]
       )
       await setState(phone, "adhoc_confirm", vId, { cart })
@@ -2205,14 +2224,14 @@ async function handleCustomerBot(msg, pid) {
 
     // Show updated cart + options
     const cartLines = cart.map(item =>
-      `? ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
+      `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
     ).join("\n")
 
     await sendButtons(pid, phone,
       `*Cart Updated!*\n\n${cartLines}\n\nDo you want to add more items or place the order?`,
       [
         { id: "adhoc_place_order", title: "Place Order" },
-        { id: "adhoc_add_more",    title: "? Add More"    },
+        { id: "adhoc_add_more",    title: "Add More"    },
       ]
     )
     await setState(phone, "adhoc_cart", vId, { cart })
@@ -2241,10 +2260,10 @@ async function handleCustomerBot(msg, pid) {
       const tomorrow = getISTDateStr(1)
 
       await sendButtons(pid, phone,
-        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\nDelivery Date: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
         [
-          { id: "adhoc_confirm", title: "? Confirm Order" },
-          { id: "adhoc_more",    title: "? Add More"      },
+          { id: "adhoc_confirm", title: "Confirm Order" },
+          { id: "adhoc_more",    title: "Add More"      },
         ]
       )
       await setState(phone, "adhoc_confirm", vId, { cart })
@@ -2252,12 +2271,12 @@ async function handleCustomerBot(msg, pid) {
     }
 
     // Any other input — re-show cart
-    const cartLines = cart.map(item => `? ${item.product_name} × ${item.qty}`).join("\n")
+    const cartLines = cart.map(item => `• ${item.product_name} × ${item.qty}`).join("\n")
     await sendButtons(pid, phone,
       `*Your Cart:*\n\n${cartLines}\n\nWhat would you like to do?`,
       [
         { id: "adhoc_place_order", title: "Place Order" },
-        { id: "adhoc_add_more",    title: "? Add More"    },
+        { id: "adhoc_add_more",    title: "Add More"    },
       ]
     )
     return
@@ -2332,10 +2351,10 @@ async function handleCustomerBot(msg, pid) {
     const timingLine = formatDeliveryWindow(profile)
 
     await sendText(pid, phone,
-      `? *Order Placed!*\n\n${itemLines}${deliveryLine}\n\n` +
+      `*Order Placed!*\n\n${itemLines}${deliveryLine}\n\n` +
       `Total: Rs.${grandTotal}\n` +
       `${formatAddress(addr)}\n` +
-      `Delivery: ${displayDate(tomorrow)}${timingLine}\n\nThank you! `
+      `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
     )
 
     const sub   = await getSubscription(cId, vId)

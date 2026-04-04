@@ -200,7 +200,7 @@ function localDateStr(date) {
  * Generate orders for both today and tomorrow (no duplicates — ON CONFLICT handles it).
  * Skips already-delivered orders in all cases.
  */
-async function generateOrdersForVendor(vendorId) {
+async function generateOrdersForVendor(vendorId, options = {}) {
   const { rows: prodCheck } = await pool.query(
     `SELECT COUNT(*) AS cnt FROM products WHERE vendor_id = $1 AND is_active = true`,
     [vendorId]
@@ -210,9 +210,15 @@ async function generateOrdersForVendor(vendorId) {
   const now = getISTNow()
   const today    = localDateStr(now)
   const tomorrow = localDateStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))
+  const includeToday = options.includeToday !== false
+  const includeTomorrow = options.includeTomorrow !== false
 
-  await generateForDate(vendorId, today,    hasProducts)
-  await generateForDate(vendorId, tomorrow, hasProducts)
+  if (includeToday) {
+    await generateForDate(vendorId, today, hasProducts)
+  }
+  if (includeTomorrow) {
+    await generateForDate(vendorId, tomorrow, hasProducts)
+  }
 }
 
 module.exports = { generateOrdersForVendor }

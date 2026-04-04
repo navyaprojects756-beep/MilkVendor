@@ -366,7 +366,7 @@ router.post("/", async (req, res) => {
             `, [customerId])
 
             try {
-              await generateOrdersForVendor(vendorId)
+              await generateOrdersForVendor(vendorId, { includeToday: false, includeTomorrow: true })
               console.log("Orders regenerated ✅")
             } catch (genErr) {
               console.error("Order regeneration error:", genErr.message)

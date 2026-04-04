@@ -1072,7 +1072,7 @@ router.get("/payments/:customerId", requireAdmin, async (req, res) => {
     )
     if (check.rowCount === 0) return res.status(403).json({ message: "Unauthorized" })
 
-    const [payments, settings, totalR, unpaidR] = await Promise.all([
+    const [payments, settings, totalR, paymentTotalsR] = await Promise.all([
       pool.query(`
         SELECT payment_id, amount, payment_method, notes, screenshot_url,
                recorded_by, payment_date, created_at,
@@ -1100,30 +1100,20 @@ router.get("/payments/:customerId", requireAdmin, async (req, res) => {
         [req.params.customerId, vendorId]
       ),
       pool.query(
-        `SELECT COALESCE(SUM(order_total), 0) AS total
-         FROM (
-           SELECT
-             o.order_id,
-             COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
-             + CASE
-                 WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
-                 ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
-               END AS order_total
-           FROM orders o
-           LEFT JOIN order_items oi ON oi.order_id = o.order_id
-           WHERE o.customer_id=$1 AND o.vendor_id=$2
-             AND o.is_delivered=true
-             AND COALESCE(o.payment_status,'unpaid')='unpaid'
-           GROUP BY o.order_id
-         ) totals`,
+        `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM payments
+         WHERE customer_id=$1
+           AND vendor_id=$2
+           AND COALESCE(is_verified, false)=true
+           AND COALESCE(is_revoked, false)=false`,
         [req.params.customerId, vendorId]
-      ),
+      )
     ])
 
     const pricePerUnit = parseFloat(settings.rows[0]?.price_per_unit || 0)
     const totalBilled  = parseFloat(totalR.rows[0].total || 0)
-    const outstanding  = parseFloat(unpaidR.rows[0].total || 0)
-    const totalPaid    = totalBilled - outstanding
+    const totalPaid    = parseFloat(paymentTotalsR.rows[0].total || 0)
+    const outstanding  = Math.max(totalBilled - totalPaid, 0)
 
     res.json({ payments: payments.rows, totalBilled, totalPaid, outstanding, pricePerUnit })
   } catch (err) {
@@ -1197,8 +1187,7 @@ router.get("/payments-history", requireAdmin, async (req, res) => {
         order_totals AS (
           SELECT
             customer_id,
-            COALESCE(SUM(order_total), 0) AS total_billed,
-            COALESCE(SUM(CASE WHEN COALESCE(payment_status, 'unpaid') = 'unpaid' THEN order_total ELSE 0 END), 0) AS outstanding
+            COALESCE(SUM(order_total), 0) AS total_billed
           FROM delivered_order_totals
           GROUP BY customer_id
         ),
@@ -1232,7 +1221,7 @@ router.get("/payments-history", requireAdmin, async (req, res) => {
           END AS address,
           COALESCE(ot.total_billed, 0) AS total_billed,
           COALESCE(pt.received_amount, 0) AS received_amount,
-          COALESCE(ot.outstanding, 0) AS outstanding
+          GREATEST(COALESCE(ot.total_billed, 0) - COALESCE(pt.received_amount, 0), 0) AS outstanding
         FROM customer_vendor_profile cv
         JOIN customers c ON c.customer_id = cv.customer_id
         LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
@@ -1243,9 +1232,9 @@ router.get("/payments-history", requireAdmin, async (req, res) => {
           AND (
             COALESCE(ot.total_billed, 0) > 0
             OR COALESCE(pt.received_amount, 0) > 0
-            OR COALESCE(ot.outstanding, 0) > 0
+            OR GREATEST(COALESCE(ot.total_billed, 0) - COALESCE(pt.received_amount, 0), 0) > 0
           )
-        ORDER BY COALESCE(ot.outstanding, 0) DESC, c.name ASC
+        ORDER BY GREATEST(COALESCE(ot.total_billed, 0) - COALESCE(pt.received_amount, 0), 0) DESC, c.name ASC
       `, [vendorId, from, to]),
     ])
 
@@ -1322,11 +1311,23 @@ router.post("/payments", requireAdmin, async (req, res) => {
 router.patch("/payments/:paymentId/verify", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
-    const result = await pool.query(
-      "UPDATE payments SET is_verified=true, is_revoked=false WHERE payment_id=$1 AND vendor_id=$2 RETURNING payment_id",
+    const paymentRes = await pool.query(
+      "UPDATE payments SET is_verified=true, is_revoked=false WHERE payment_id=$1 AND vendor_id=$2 RETURNING payment_id, customer_id, period_from, period_to",
       [req.params.paymentId, vendorId]
     )
-    if (result.rowCount === 0) return res.status(404).json({ message: "Payment not found" })
+    if (paymentRes.rowCount === 0) return res.status(404).json({ message: "Payment not found" })
+    const { customer_id, period_from, period_to } = paymentRes.rows[0]
+
+    if (period_from && period_to) {
+      await pool.query(`
+        UPDATE orders
+        SET payment_status='paid'
+        WHERE customer_id=$1 AND vendor_id=$2
+          AND order_date >= $3 AND order_date <= $4
+          AND is_delivered=true
+      `, [customer_id, vendorId, period_from, period_to])
+    }
+
     res.json({ success: true })
   } catch (err) {
     console.error(err)
@@ -1443,7 +1444,7 @@ router.delete("/pauses/:pauseId", requireAdmin, async (req, res) => {
     )
     if (result.rowCount === 0) return res.status(404).json({ error: "Pause not found" })
     await restorePausedOrders(result.rows[0].customer_id, vendorId)
-    await generateOrdersForVendor(vendorId)
+    await generateOrdersForVendor(vendorId, { includeToday: false, includeTomorrow: true })
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
