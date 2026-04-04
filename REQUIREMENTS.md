@@ -371,6 +371,34 @@ Current behavior:
 - vendor can reply with text inside the active 24-hour session window
 - message thread shows customer name, phone, and address details
 - date/location filters are available on the messages page
+- vendor replies are text-only support replies in the current implementation
+
+### Future outbound vendor notices
+
+The platform should also support vendor-to-customer operational notices for cases such as:
+
+- no delivery today
+- no delivery tomorrow
+- no delivery for a selected date range
+- temporary route or supply interruption
+
+Recommended implementation direction:
+
+- add a vendor dashboard notice-sending page or action
+- allow targeting:
+  - all active customers
+  - filtered customers
+  - apartment-wise customers
+  - block-wise customers
+  - selected customers
+- store notice history for audit and troubleshooting
+- keep this feature separate from the current one-to-one Messages reply flow
+
+WhatsApp policy direction:
+
+- normal free-text replies are allowed inside the active 24-hour customer service window
+- proactive business-initiated notices outside that window require approved WhatsApp templates
+- for multi-customer operational notices, template-based sending is the safer long-term model
 
 ### Settings page
 
