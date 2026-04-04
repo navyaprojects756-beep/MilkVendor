@@ -105,35 +105,52 @@ async function sendVendorWhatsAppText(phoneNumberId, phone, text) {
   return response.data
 }
 
-async function sendVendorWhatsAppTemplate(phoneNumberId, phone, templateName, bodyParameters = []) {
-  const response = await axios.post(
-    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to: phone,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: "en_US" },
-        components: [
-          {
-            type: "body",
-            parameters: bodyParameters.map((text) => ({
-              type: "text",
-              text: String(text ?? ""),
-            })),
+function getTemplateLanguageCandidates(languageCode) {
+  const normalized = String(languageCode || "").trim()
+  const codes = [normalized, "en", "en_US"].filter(Boolean)
+  return [...new Set(codes)]
+}
+
+async function sendVendorWhatsAppTemplate(phoneNumberId, phone, templateName, bodyParameters = [], languageCode = "en") {
+  let lastError = null
+  for (const code of getTemplateLanguageCandidates(languageCode)) {
+    try {
+      const response = await axios.post(
+        `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "template",
+          template: {
+            name: templateName,
+            language: { code },
+            components: [
+              {
+                type: "body",
+                parameters: bodyParameters.map((text) => ({
+                  type: "text",
+                  text: String(text ?? ""),
+                })),
+              },
+            ],
           },
-        ],
-      },
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json",
-      },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        }
+      )
+      return response.data
+    } catch (err) {
+      lastError = err
+      const details = err.response?.data?.error?.details || err.response?.data?.error?.message || ""
+      const shouldRetryWithFallback = /language|locale|translation|parameter value is not valid/i.test(details)
+      if (!shouldRetryWithFallback) throw err
     }
-  )
-  return response.data
+  }
+  throw lastError
 }
 
 function normalizeDateOnly(value) {
@@ -2136,6 +2153,7 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
 
     let sentCount = 0
     let failedCount = 0
+    const failedRecipients = []
 
     for (const row of recipients) {
       let params = []
@@ -2157,7 +2175,7 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
       }
 
       try {
-        const waRes = await sendVendorWhatsAppTemplate(phoneNumberId, row.customer_phone, template.template_name, params)
+        const waRes = await sendVendorWhatsAppTemplate(phoneNumberId, row.customer_phone, template.template_name, params, template.language_code)
         const waMessageId = waRes?.messages?.[0]?.id || null
         await pool.query(
           `INSERT INTO vendor_notice_recipients
@@ -2168,6 +2186,11 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
         sentCount += 1
       } catch (err) {
         const details = err.response?.data?.error?.message || err.message
+        failedRecipients.push({
+          customer_id: row.customer_id,
+          phone: row.customer_phone,
+          error: details,
+        })
         await pool.query(
           `INSERT INTO vendor_notice_recipients
              (notice_batch_id, vendor_id, customer_id, phone, template_key, template_name, rendered_params, status, error_message)
@@ -2188,7 +2211,13 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
       [noticeBatchId, sentCount, failedCount, failedCount > 0 && sentCount === 0 ? "failed" : "completed"]
     )
 
-    res.json({ success: true, notice_batch_id: noticeBatchId, sent_count: sentCount, failed_count: failedCount })
+    res.json({
+      success: true,
+      notice_batch_id: noticeBatchId,
+      sent_count: sentCount,
+      failed_count: failedCount,
+      failed_recipients: failedRecipients,
+    })
   } catch (e) {
     res.status(400).json({ message: e.message })
   }
