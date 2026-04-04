@@ -206,13 +206,13 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
       data[`product_${i}_price`] = priceLabel
       data[`product_${i}_label`] = nameWithUnit.length <= 20 ? nameWithUnit : nameWithUnit.slice(0, 20) // legacy
       data[`show_product_${i}`]  = true
-      data[`qty_${i}_init`]      = currentQty > 0 ? String(currentQty) : ""
+      data[`qty_${i}_init`]      = String(currentQty > 0 ? currentQty : 0)
     } else {
       data[`product_${i}_name`]  = ""
       data[`product_${i}_price`] = ""
       data[`product_${i}_label`] = ""
       data[`show_product_${i}`]  = false
-      data[`qty_${i}_init`]      = ""
+      data[`qty_${i}_init`]      = "0"
     }
   }
 

@@ -1298,7 +1298,7 @@ async function handleCustomerBot(msg, pid) {
         return
       }
       await sendProductListFlow(pid, phone, cId, vId,
-        `*Daily Subscription Products*\n\nSet your daily quantity for each product below. Leave blank to keep unchanged.`
+        `*Daily Subscription Products*\n\nSet your daily quantity for each product below.`
       )
       await setState(phone, "manage_products", vId)
       return
@@ -1314,7 +1314,7 @@ async function handleCustomerBot(msg, pid) {
       }
       const tomorrow = istTomorrowStr()
       await sendProductListFlow(pid, phone, cId, vId,
-        `*Order Tomorrow Products*\n\nEnter quantity for each product you want delivered on *${displayDate(tomorrow)}*.\nLeave blank to skip.`,
+        `*Order Tomorrow Products*\n\nEnter quantity for each product you want delivered on *${displayDate(tomorrow)}*.`,
         "adhoc"
       )
       await setState(phone, "adhoc_product", vId, { cart: [] })
@@ -2037,7 +2037,7 @@ async function handleCustomerBot(msg, pid) {
 
     // Re-open the flow on any other input
     await sendProductListFlow(pid, phone, cId, vId,
-      `*Your Daily Products*\n\nSet your daily quantity for each product below. Leave blank to keep unchanged.`
+      `*Your Daily Products*\n\nSet your daily quantity for each product below.`
     )
     return
   }
