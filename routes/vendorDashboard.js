@@ -105,6 +105,157 @@ async function sendVendorWhatsAppText(phoneNumberId, phone, text) {
   return response.data
 }
 
+async function sendVendorWhatsAppTemplate(phoneNumberId, phone, templateName, bodyParameters = []) {
+  const response = await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to: phone,
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: "en_US" },
+        components: [
+          {
+            type: "body",
+            parameters: bodyParameters.map((text) => ({
+              type: "text",
+              text: String(text ?? ""),
+            })),
+          },
+        ],
+      },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    }
+  )
+  return response.data
+}
+
+function normalizeDateOnly(value) {
+  if (!value) return null
+  return String(value).slice(0, 10)
+}
+
+function formatISTDate(value) {
+  if (!value) return ""
+  const date = new Date(`${String(value).slice(0, 10)}T12:00:00Z`)
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10)
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date)
+}
+
+function formatAmount(value) {
+  const num = Number.parseFloat(value || 0) || 0
+  return num.toFixed(2).replace(/\.00$/, "")
+}
+
+async function getNoticeTemplateByKey(templateKey) {
+  const result = await pool.query(
+    `SELECT *
+     FROM whatsapp_notice_templates
+     WHERE template_key = $1 AND is_active = true
+     LIMIT 1`,
+    [templateKey]
+  )
+  return result.rows[0] || null
+}
+
+async function getNoticeReasonByCode(reasonCode) {
+  if (!reasonCode) return null
+  const result = await pool.query(
+    `SELECT *
+     FROM whatsapp_notice_reasons
+     WHERE reason_code = $1 AND is_active = true
+     LIMIT 1`,
+    [reasonCode]
+  )
+  return result.rows[0] || null
+}
+
+async function getNoticeAudience(vendorId, { from, to }) {
+  const query = `
+    WITH order_totals AS (
+      SELECT
+        o.customer_id,
+        SUM(COALESCE((
+          SELECT SUM(oi.quantity * oi.price_at_order)
+          FROM order_items oi
+          WHERE oi.order_id = o.order_id
+        ), o.quantity * COALESCE(vs.price_per_unit, 0)) + COALESCE(o.delivery_charge_amount, 0)) AS total_billed
+      FROM orders o
+      LEFT JOIN vendor_settings vs ON vs.vendor_id = o.vendor_id
+      WHERE o.vendor_id = $1
+        AND o.is_delivered = true
+        AND o.order_date >= $2::date
+        AND o.order_date <= $3::date
+      GROUP BY o.customer_id
+    ),
+    payment_totals AS (
+      SELECT
+        p.customer_id,
+        SUM(CASE WHEN p.is_verified = true AND COALESCE(p.is_revoked, false) = false THEN p.amount ELSE 0 END) AS received_amount
+      FROM payments p
+      WHERE p.vendor_id = $1
+        AND p.payment_date >= $2::date
+        AND p.payment_date <= $3::date
+      GROUP BY p.customer_id
+    )
+    SELECT
+      c.customer_id,
+      c.name AS customer_name,
+      c.phone AS customer_phone,
+      cv.address_type,
+      cv.flat_number,
+      cv.manual_address,
+      a.name AS apartment_name,
+      b.block_name,
+      CASE
+        WHEN cv.address_type = 'apartment'
+        THEN a.name || COALESCE(' - ' || b.block_name, '') || COALESCE(' - Flat ' || cv.flat_number, '')
+        ELSE COALESCE(cv.manual_address, '')
+      END AS address,
+      COALESCE(ot.total_billed, 0) AS total_billed,
+      COALESCE(pt.received_amount, 0) AS received_amount,
+      GREATEST(COALESCE(ot.total_billed, 0) - COALESCE(pt.received_amount, 0), 0) AS outstanding
+    FROM customer_vendor_profile cv
+    JOIN customers c ON c.customer_id = cv.customer_id
+    LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
+    LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
+    LEFT JOIN order_totals ot ON ot.customer_id = cv.customer_id
+    LEFT JOIN payment_totals pt ON pt.customer_id = cv.customer_id
+    WHERE cv.vendor_id = $1
+  `
+  const result = await pool.query(query, [vendorId, from, to])
+  return result.rows
+}
+
+function applyNoticeFilters(rows, { search = "", location = "", block = "", onlyNotPaid = false }) {
+  const q = String(search || "").trim().toLowerCase()
+  return rows.filter((row) => {
+    if (onlyNotPaid && !(Number.parseFloat(row.outstanding || 0) > 0)) return false
+    if (location === "__individual__" && row.address_type === "apartment") return false
+    if (location && location !== "__individual__" && row.apartment_name !== location) return false
+    if (block && row.block_name !== block) return false
+    if (!q) return true
+    return [
+      row.customer_name,
+      row.customer_phone,
+      row.address,
+      row.apartment_name,
+      row.block_name,
+    ].some((value) => String(value || "").toLowerCase().includes(q))
+  })
+}
+
 async function restorePausedOrders(customerId, vendorId) {
   try {
     const today = getISTDateStr(0)
@@ -1836,6 +1987,212 @@ router.post("/messages/thread/:phone/reply", requireAdmin, async (req, res) => {
 /* ══════════════════════════════════════════
    WHATSAPP FLOW DATA EXCHANGE ENDPOINT
 ══════════════════════════════════════════ */
+
+router.get("/notices/config", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const [templatesRes, reasonsRes, audienceRows] = await Promise.all([
+      pool.query(
+        `SELECT template_key, template_name, display_name, template_category, header_text, body_text, variable_schema, sort_order
+         FROM whatsapp_notice_templates
+         WHERE is_active = true
+         ORDER BY sort_order, notice_template_id`
+      ),
+      pool.query(
+        `SELECT reason_code, display_name, message_text, sort_order
+         FROM whatsapp_notice_reasons
+         WHERE is_active = true
+         ORDER BY sort_order, reason_id`
+      ),
+      getNoticeAudience(vendorId, { from: getISTDateStr(0), to: getISTDateStr(0) }),
+    ])
+
+    const apartments = [...new Set(audienceRows.filter((row) => row.address_type === "apartment").map((row) => row.apartment_name).filter(Boolean))]
+    res.json({ templates: templatesRes.rows, reasons: reasonsRes.rows, apartments })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+router.get("/notices/audience", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const { from, to, search = "", location = "", block = "", template_key = "" } = req.query
+    if (!from || !to) return res.status(400).json({ message: "from and to are required" })
+
+    const allRows = await getNoticeAudience(vendorId, { from, to })
+    const onlyNotPaid = template_key === "payment_due_reminder"
+    const customers = applyNoticeFilters(allRows, { search, location, block, onlyNotPaid })
+    const blocks = location && location !== "__individual__"
+      ? [...new Set(allRows.filter((row) => row.apartment_name === location).map((row) => row.block_name).filter(Boolean))]
+      : []
+
+    const summary = customers.reduce((acc, row) => {
+      acc.totalCustomers += 1
+      acc.notPaidCustomers += Number.parseFloat(row.outstanding || 0) > 0 ? 1 : 0
+      acc.totalOutstanding += Number.parseFloat(row.outstanding || 0) || 0
+      return acc
+    }, { totalCustomers: 0, notPaidCustomers: 0, totalOutstanding: 0 })
+
+    res.json({ customers, blocks, summary })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+router.get("/notices/history", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const result = await pool.query(
+      `SELECT
+         b.notice_batch_id,
+         b.template_key,
+         t.display_name AS template_display_name,
+         b.reason_code,
+         r.display_name AS reason_display_name,
+         b.filter_from,
+         b.filter_to,
+         b.notice_date,
+         b.notice_from,
+         b.notice_to,
+         b.total_recipients,
+         b.sent_count,
+         b.failed_count,
+         b.status,
+         b.created_on
+       FROM vendor_notice_batches b
+       LEFT JOIN whatsapp_notice_templates t ON t.template_key = b.template_key
+       LEFT JOIN whatsapp_notice_reasons r ON r.reason_code = b.reason_code
+       WHERE b.vendor_id = $1
+       ORDER BY b.created_on DESC, b.notice_batch_id DESC
+       LIMIT 50`,
+      [vendorId]
+    )
+    res.json({ history: result.rows })
+  } catch (e) {
+    res.status(500).json({ message: e.message })
+  }
+})
+
+router.post("/notices/send", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const {
+      template_key,
+      reason_code,
+      notice_date,
+      notice_from,
+      notice_to,
+      filter_from,
+      filter_to,
+      search = "",
+      location = "",
+      block = "",
+    } = req.body || {}
+
+    const template = await getNoticeTemplateByKey(template_key)
+    if (!template) return res.status(400).json({ message: "Invalid template" })
+
+    const from = normalizeDateOnly(filter_from)
+    const to = normalizeDateOnly(filter_to)
+    if (!from || !to) return res.status(400).json({ message: "Filter range is required" })
+
+    let reason = null
+    if (template_key === "delivery_unavailable_date" || template_key === "delivery_unavailable_from_to") {
+      reason = await getNoticeReasonByCode(reason_code)
+      if (!reason) return res.status(400).json({ message: "Invalid reason" })
+    }
+
+    const allRows = await getNoticeAudience(vendorId, { from, to })
+    const onlyNotPaid = template_key === "payment_due_reminder"
+    const recipients = applyNoticeFilters(allRows, { search, location, block, onlyNotPaid }).filter((row) => row.customer_phone)
+    if (!recipients.length) return res.status(400).json({ message: "No customers match the selected filters" })
+
+    const vendorRes = await pool.query("SELECT phone_number_id FROM vendors WHERE vendor_id = $1 LIMIT 1", [vendorId])
+    const phoneNumberId = vendorRes.rows[0]?.phone_number_id
+    if (!phoneNumberId) return res.status(400).json({ message: "Vendor phone number is not configured" })
+
+    const batchRes = await pool.query(
+      `INSERT INTO vendor_notice_batches
+         (vendor_id, template_key, reason_code, filter_from, filter_to, notice_date, notice_from, notice_to, location_filter, block_filter, search_text, recipient_scope, total_recipients, created_by_vendor_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'filtered',$12,$1)
+       RETURNING notice_batch_id`,
+      [
+        vendorId,
+        template_key,
+        reason_code || null,
+        from,
+        to,
+        normalizeDateOnly(notice_date),
+        normalizeDateOnly(notice_from),
+        normalizeDateOnly(notice_to),
+        location || null,
+        block || null,
+        search || null,
+        recipients.length,
+      ]
+    )
+    const noticeBatchId = batchRes.rows[0].notice_batch_id
+
+    let sentCount = 0
+    let failedCount = 0
+
+    for (const row of recipients) {
+      let params = []
+      if (template_key === "delivery_unavailable_date") {
+        const dateValue = normalizeDateOnly(notice_date)
+        if (!dateValue) throw new Error("Delivery date is required")
+        params = [formatISTDate(dateValue), reason.message_text]
+      } else if (template_key === "delivery_unavailable_from_to") {
+        const fromValue = normalizeDateOnly(notice_from)
+        const toValue = normalizeDateOnly(notice_to)
+        if (!fromValue || !toValue) throw new Error("From and To dates are required")
+        params = [formatISTDate(fromValue), formatISTDate(toValue), reason.message_text]
+      } else if (template_key === "payment_due_reminder") {
+        const outstanding = Number.parseFloat(row.outstanding || 0) || 0
+        if (outstanding <= 0) continue
+        params = [formatAmount(outstanding), formatISTDate(from), formatISTDate(to)]
+      } else {
+        throw new Error("Unsupported template")
+      }
+
+      try {
+        const waRes = await sendVendorWhatsAppTemplate(phoneNumberId, row.customer_phone, template.template_name, params)
+        const waMessageId = waRes?.messages?.[0]?.id || null
+        await pool.query(
+          `INSERT INTO vendor_notice_recipients
+             (notice_batch_id, vendor_id, customer_id, phone, template_key, template_name, rendered_params, status, wa_message_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,'sent',$8)`,
+          [noticeBatchId, vendorId, row.customer_id, row.customer_phone, template_key, template.template_name, JSON.stringify(params), waMessageId]
+        )
+        sentCount += 1
+      } catch (err) {
+        const details = err.response?.data?.error?.message || err.message
+        await pool.query(
+          `INSERT INTO vendor_notice_recipients
+             (notice_batch_id, vendor_id, customer_id, phone, template_key, template_name, rendered_params, status, error_message)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,'failed',$8)`,
+          [noticeBatchId, vendorId, row.customer_id, row.customer_phone, template_key, template.template_name, JSON.stringify(params), details]
+        )
+        failedCount += 1
+      }
+    }
+
+    await pool.query(
+      `UPDATE vendor_notice_batches
+       SET sent_count = $2,
+           failed_count = $3,
+           status = $4,
+           modified_on = NOW()
+       WHERE notice_batch_id = $1`,
+      [noticeBatchId, sentCount, failedCount, failedCount > 0 && sentCount === 0 ? "failed" : "completed"]
+    )
+
+    res.json({ success: true, notice_batch_id: noticeBatchId, sent_count: sentCount, failed_count: failedCount })
+  } catch (e) {
+    res.status(400).json({ message: e.message })
+  }
+})
 
 const crypto = require("crypto")
 const fs_    = require("fs")
