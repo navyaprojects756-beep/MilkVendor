@@ -65,18 +65,18 @@ app.get("/", (req,res)=>{
 
 app.get("/webhook",(req,res)=>{
 
- console.log("🔵 Webhook verification request")
+console.log("Webhook verification request")
 
  const mode=req.query["hub.mode"]
  const token=req.query["hub.verify_token"]
  const challenge=req.query["hub.challenge"]
 
  if(mode==="subscribe" && token===VERIFY_TOKEN){
-   console.log("✅ Webhook verified")
+  console.log("Webhook verified")
    return res.status(200).send(challenge)
  }
 
- console.log("❌ Webhook verification failed")
+console.log("Webhook verification failed")
  res.sendStatus(403)
 
 })
@@ -93,7 +93,7 @@ app.post("/webhook",async(req,res)=>{
  const value=req.body?.entry?.[0]?.changes?.[0]?.value
 
  if(!value){
-   console.log("⚠ Ignored webhook with no value payload")
+  console.log("Ignored webhook with no value payload")
    return
  }
 
@@ -111,7 +111,7 @@ app.post("/webhook",async(req,res)=>{
  /* ---------------- DUPLICATE PROTECTION ---------------- */
 
  if(processedMessages.has(msg.id)){
-   console.log("⚠ Duplicate message skipped:", msg.id)
+  console.log("Duplicate message skipped:", msg.id)
    return
  }
 
@@ -123,7 +123,7 @@ app.post("/webhook",async(req,res)=>{
  /* ---------------- LOGGING ---------------- */
 
  console.log("\n==============================")
- console.log("📩 Incoming Message")
+console.log("Incoming Message")
  console.log("From:", msg.from)
  console.log("Type:", msg.type)
  console.log("Phone ID:", phoneNumberId)
@@ -140,13 +140,13 @@ app.post("/webhook",async(req,res)=>{
 
  if(phoneNumberId===MAIN_VENDOR_PHONE_ID){
 
-   console.log("➡ Vendor Bot")
+  console.log("Vendor Bot")
 
    await handleVendorBot(msg,phoneNumberId)
 
  }else{
 
-   console.log("➡ Customer Bot")
+  console.log("Customer Bot")
 
    await handleCustomerBot(msg,phoneNumberId)
 
@@ -155,7 +155,7 @@ app.post("/webhook",async(req,res)=>{
  }
  catch(err){
 
- console.log("🔥 Webhook error:", err.message)
+console.log("Webhook error:", err.message)
 
  }
 
@@ -164,11 +164,11 @@ app.post("/webhook",async(req,res)=>{
 /* ---------------- GLOBAL ERROR HANDLER ---------------- */
 
 process.on("unhandledRejection",(err)=>{
- console.log("❌ Unhandled Promise:", err)
+console.log("Unhandled Promise:", err)
 })
 
 process.on("uncaughtException",(err)=>{
- console.log("❌ Uncaught Exception:", err)
+console.log("Uncaught Exception:", err)
 })
 
 /* ---------------- SERVER START ---------------- */
@@ -176,7 +176,7 @@ process.on("uncaughtException",(err)=>{
 app.listen(PORT,()=>{
 
  console.log("================================")
- console.log("🚀 Milk WhatsApp Bot Running")
+console.log("Milk WhatsApp Bot Running")
  console.log("Port:",PORT)
  console.log("Vendor Phone ID:",MAIN_VENDOR_PHONE_ID)
  console.log("================================")

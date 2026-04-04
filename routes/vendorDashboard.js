@@ -732,6 +732,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
       notify_on_delivery,
       notify_pending_eod,
       apply_delivery_charge_on_subscription,
+      payment_proof_required,
       max_quantity_per_order,
       is_active,
       auto_generate_time,
@@ -757,10 +758,10 @@ router.post("/settings", requireAdmin, async (req, res) => {
         require_flat_number, allow_manual_address,
         order_window_enabled, auto_generate_orders,
         notify_on_delivery, notify_pending_eod, apply_delivery_charge_on_subscription,
-        max_quantity_per_order, is_active,
+        payment_proof_required, max_quantity_per_order, is_active,
         auto_generate_time, price_per_unit, show_phone_numbers,
         adhoc_delivery_charge, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17, NOW())
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, NOW())
       ON CONFLICT (vendor_id) DO UPDATE SET
         allow_apartments       = COALESCE($2,  vendor_settings.allow_apartments),
         allow_houses           = COALESCE($3,  vendor_settings.allow_houses),
@@ -772,12 +773,13 @@ router.post("/settings", requireAdmin, async (req, res) => {
         notify_on_delivery     = COALESCE($9,  vendor_settings.notify_on_delivery),
         notify_pending_eod     = COALESCE($10, vendor_settings.notify_pending_eod),
         apply_delivery_charge_on_subscription = COALESCE($11, vendor_settings.apply_delivery_charge_on_subscription),
-        max_quantity_per_order = COALESCE($12, vendor_settings.max_quantity_per_order),
-        is_active              = COALESCE($13, vendor_settings.is_active),
-        auto_generate_time     = COALESCE($14, vendor_settings.auto_generate_time),
-        price_per_unit         = COALESCE($15, vendor_settings.price_per_unit),
-        show_phone_numbers     = COALESCE($16, vendor_settings.show_phone_numbers),
-        adhoc_delivery_charge  = COALESCE($17, vendor_settings.adhoc_delivery_charge),
+        payment_proof_required = COALESCE($12, vendor_settings.payment_proof_required),
+        max_quantity_per_order = COALESCE($13, vendor_settings.max_quantity_per_order),
+        is_active              = COALESCE($14, vendor_settings.is_active),
+        auto_generate_time     = COALESCE($15, vendor_settings.auto_generate_time),
+        price_per_unit         = COALESCE($16, vendor_settings.price_per_unit),
+        show_phone_numbers     = COALESCE($17, vendor_settings.show_phone_numbers),
+        adhoc_delivery_charge  = COALESCE($18, vendor_settings.adhoc_delivery_charge),
         updated_at             = NOW()
     `, [
       vendorId,
@@ -786,6 +788,7 @@ router.post("/settings", requireAdmin, async (req, res) => {
       order_window_enabled, auto_generate_orders,
       notify_on_delivery, notify_pending_eod,
       apply_delivery_charge_on_subscription != null ? Boolean(apply_delivery_charge_on_subscription) : null,
+      payment_proof_required != null ? Boolean(payment_proof_required) : null,
       max_quantity_per_order, is_active,
       resolvedAutoGenerateTime,
       price_per_unit        != null ? parseFloat(price_per_unit)        : null,
@@ -1123,6 +1126,133 @@ router.get("/payments/:customerId", requireAdmin, async (req, res) => {
     const totalPaid    = totalBilled - outstanding
 
     res.json({ payments: payments.rows, totalBilled, totalPaid, outstanding, pricePerUnit })
+  } catch (err) {
+    console.error(err)
+    res.status(500).send("Error")
+  }
+})
+
+// GET /payments-history — all payments + customer billing summary for a date range
+router.get("/payments-history", requireAdmin, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req)
+    const from = req.query.from
+    const to = req.query.to
+
+    if (!from || !to) {
+      return res.status(400).json({ message: "from and to are required" })
+    }
+
+    const [paymentsRes, balancesRes] = await Promise.all([
+      pool.query(`
+        SELECT
+          p.payment_id, p.customer_id, p.amount, p.payment_method, p.notes, p.screenshot_url,
+          p.recorded_by, p.payment_date, p.created_at, p.period_from, p.period_to,
+          p.is_verified, p.is_revoked,
+          c.name AS customer_name,
+          c.phone AS customer_phone,
+          cv.address_type,
+          cv.flat_number,
+          cv.manual_address,
+          a.name AS apartment_name,
+          b.block_name,
+          CASE
+            WHEN cv.address_type='apartment'
+              THEN CONCAT_WS(', ',
+                NULLIF(CONCAT('Flat ', cv.flat_number), 'Flat '),
+                NULLIF(CONCAT('Block ', b.block_name), 'Block '),
+                a.name
+              )
+            ELSE COALESCE(cv.manual_address, '')
+          END AS address
+        FROM payments p
+        JOIN customers c ON c.customer_id = p.customer_id
+        LEFT JOIN customer_vendor_profile cv
+          ON cv.customer_id = p.customer_id AND cv.vendor_id = p.vendor_id
+        LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
+        LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
+        WHERE p.vendor_id = $1
+          AND p.payment_date >= $2
+          AND p.payment_date <= $3
+        ORDER BY p.payment_date DESC, p.created_at DESC, p.payment_id DESC
+      `, [vendorId, from, to]),
+      pool.query(`
+        WITH delivered_order_totals AS (
+          SELECT
+            o.customer_id,
+            o.payment_status,
+            COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
+            + CASE
+                WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
+                ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
+              END AS order_total
+          FROM orders o
+          LEFT JOIN order_items oi ON oi.order_id = o.order_id
+          WHERE o.vendor_id = $1
+            AND o.is_delivered = true
+            AND o.order_date >= $2
+            AND o.order_date <= $3
+          GROUP BY o.order_id, o.customer_id, o.payment_status
+        ),
+        order_totals AS (
+          SELECT
+            customer_id,
+            COALESCE(SUM(order_total), 0) AS total_billed,
+            COALESCE(SUM(CASE WHEN COALESCE(payment_status, 'unpaid') = 'unpaid' THEN order_total ELSE 0 END), 0) AS outstanding
+          FROM delivered_order_totals
+          GROUP BY customer_id
+        ),
+        payment_totals AS (
+          SELECT
+            customer_id,
+            COALESCE(SUM(CASE WHEN COALESCE(is_verified, false) = true AND COALESCE(is_revoked, false) = false THEN amount ELSE 0 END), 0) AS received_amount
+          FROM payments
+          WHERE vendor_id = $1
+            AND payment_date >= $2
+            AND payment_date <= $3
+          GROUP BY customer_id
+        )
+        SELECT
+          c.customer_id,
+          c.name AS customer_name,
+          c.phone AS customer_phone,
+          cv.address_type,
+          cv.flat_number,
+          cv.manual_address,
+          a.name AS apartment_name,
+          b.block_name,
+          CASE
+            WHEN cv.address_type='apartment'
+              THEN CONCAT_WS(', ',
+                NULLIF(CONCAT('Flat ', cv.flat_number), 'Flat '),
+                NULLIF(CONCAT('Block ', b.block_name), 'Block '),
+                a.name
+              )
+            ELSE COALESCE(cv.manual_address, '')
+          END AS address,
+          COALESCE(ot.total_billed, 0) AS total_billed,
+          COALESCE(pt.received_amount, 0) AS received_amount,
+          COALESCE(ot.outstanding, 0) AS outstanding
+        FROM customer_vendor_profile cv
+        JOIN customers c ON c.customer_id = cv.customer_id
+        LEFT JOIN apartments a ON a.apartment_id = cv.apartment_id
+        LEFT JOIN apartment_blocks b ON b.block_id = cv.block_id
+        LEFT JOIN order_totals ot ON ot.customer_id = cv.customer_id
+        LEFT JOIN payment_totals pt ON pt.customer_id = cv.customer_id
+        WHERE cv.vendor_id = $1
+          AND (
+            COALESCE(ot.total_billed, 0) > 0
+            OR COALESCE(pt.received_amount, 0) > 0
+            OR COALESCE(ot.outstanding, 0) > 0
+          )
+        ORDER BY COALESCE(ot.outstanding, 0) DESC, c.name ASC
+      `, [vendorId, from, to]),
+    ])
+
+    res.json({
+      payments: paymentsRes.rows,
+      customerTotals: balancesRes.rows,
+    })
   } catch (err) {
     console.error(err)
     res.status(500).send("Error")

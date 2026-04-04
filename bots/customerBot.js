@@ -1082,11 +1082,11 @@ async function handleCustomerBot(msg, pid) {
 
   const vendor = await getVendor(pid)
   if (!vendor) {
-    console.log("? No vendor found for phone_number_id:", pid)
+    console.log("No vendor found for phone_number_id:", pid)
     return
   }
   if (!vendor.is_active) {
-    console.log("? Vendor is inactive:", vendor.vendor_id)
+    console.log("Vendor is inactive:", vendor.vendor_id)
     return
   }
 
@@ -1844,10 +1844,14 @@ async function handleCustomerBot(msg, pid) {
     }
 
     await setState(phone, "payment_screenshot", vId, state.temp_data)
-    await sendButtons(pid, phone,
-      `*Payment Screenshot*\n\nSend a screenshot of your payment for our records, or tap Skip.`,
-      [{ id: "skip_screenshot", title: "? Skip" }]
-    )
+    if (settings.payment_proof_required) {
+      await sendText(pid, phone, `*Payment Screenshot*\n\nPlease send a screenshot of your payment for our records.`)
+    } else {
+      await sendButtons(pid, phone,
+        `*Payment Screenshot*\n\nSend a screenshot of your payment for our records, or tap Skip.`,
+        [{ id: "skip_screenshot", title: "Skip" }]
+      )
+    }
     return
   }
 
@@ -1858,14 +1862,22 @@ async function handleCustomerBot(msg, pid) {
     let screenshotUrl = null
 
     const isSkip = input === "skip_screenshot" || inputLower === "skip"
+    const requiresProof = !!settings.payment_proof_required
 
     if (msg.type === "image" && msg.image?.id) {
       screenshotUrl = await downloadWhatsAppMedia(msg.image.id)
+    } else if (requiresProof && isSkip) {
+      await sendText(pid, phone, "Payment proof is required for this vendor. Please send a screenshot image to continue.")
+      return
     } else if (!isSkip) {
-      await sendButtons(pid, phone,
-        "Please send a screenshot image, or tap Skip to continue without one.",
-        [{ id: "skip_screenshot", title: "? Skip" }]
-      )
+      if (requiresProof) {
+        await sendText(pid, phone, "Please send a payment screenshot image to continue.")
+      } else {
+        await sendButtons(pid, phone,
+          "Please send a screenshot image, or tap Skip to continue without one.",
+          [{ id: "skip_screenshot", title: "Skip" }]
+        )
+      }
       return
     }
 
