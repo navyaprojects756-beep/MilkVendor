@@ -1,7 +1,7 @@
 # MilkWhatsAppBot - Current Requirements And Change Log
 
-> Last updated: 2026-04-03  
-> This file reflects the current backend and frontend behavior after the recent WhatsApp flow, pause/resume, delivery charge, IST timezone, and dashboard updates.
+> Last updated: 2026-04-04  
+> This file reflects the current backend and frontend behavior after the recent WhatsApp flow, pause/resume, delivery charge, IST timezone, messaging, and vendor onboarding updates.
 
 ---
 
@@ -95,6 +95,12 @@ The current system supports:
 - Existing profile/address values are prefilled when editing profile.
 - Registration is now sent as a direct interactive flow message inside the active chat session.
 - Registration no longer depends on a WhatsApp template for normal in-session onboarding.
+- Registration flow token format is:
+  - `vendorId:customerId:new`
+- Profile edit flow token format is:
+  - `vendorId:customerId:update`
+- `Register Now` uses the registration flow.
+- `Edit Profile` uses the same registration flow in update mode.
 
 Prefill includes:
 
@@ -168,12 +174,15 @@ Mode comes from `flow_token`:
 - Subscription mode saves directly into `customer_subscriptions`
 - Adhoc mode stores a cart in conversation state, then customer confirms in WhatsApp
 - Flow JSON can be reused across vendors when their phone numbers belong to the same WhatsApp Business Account context.
+- Product quantity fields now default to `0` instead of blank.
+- Only values greater than `0` are treated as active selected quantities.
+- User-facing “Leave blank…” helper text has been removed from product flows.
 
 ### Prefill rules
 
 - Daily product flow prefills only active daily subscription quantities
 - Quick order flow prefills only existing upcoming adhoc quantities
-- First-time product selection should open blank
+- When no quantity exists, product flow opens with `0`
 
 ---
 
@@ -357,6 +366,12 @@ Pause dates on dashboard must match WhatsApp pause dates exactly.
 
 Shows inbound customer free-text messages for vendor review.
 
+Current behavior:
+
+- vendor can reply with text inside the active 24-hour session window
+- message thread shows customer name, phone, and address details
+- date/location filters are available on the messages page
+
 ### Settings page
 
 Settings currently include:
@@ -386,6 +401,7 @@ This setup makes it easier to reuse:
 - templates
 - webhook setup
 - onboarding process
+- shared flows under the same account context
 
 ### Vendor routing
 
@@ -403,6 +419,21 @@ Current vendor mapping expectation:
 - Product selection and profile update also use direct interactive flows.
 - If business-initiated messaging is needed outside the active session window, templates are still required by Meta.
 - When phone numbers are spread across different WhatsApp account contexts, the same flow/template may need to be created there too.
+- WhatsApp Flow encryption public key upload is done per `phone_number_id`, not just once globally.
+- Each vendor sender number that uses flows must have the business public key uploaded.
+- `uploadPublicKey.js` now uploads the flow public key for all `vendors.phone_number_id` values, or for one phone number when passed as an argument.
+
+### Current flow endpoints
+
+- Registration / profile flow endpoint:
+  - `/vendor/whatsapp-flow-data`
+- Product selection flow endpoint:
+  - `/customer-flow-exchange`
+
+### Current flow files
+
+- `flows/registration-flow.json`
+- `flows/product-list-flow.json`
 
 ---
 
