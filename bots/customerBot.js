@@ -3,7 +3,7 @@ const path  = require("path")
 const fs    = require("fs")
 const pool  = require("../db")
 const { generateInvoicePDF }     = require("../services/invoicePDF")
-const { refreshOrderTotals } = require("../services/orderPricing")
+const { refreshOrderTotals, getVendorDeliveryPolicy, computeOrderDeliveryCharge } = require("../services/orderPricing")
 const { generateOrdersForVendor } = require("../services/orderGenerator")
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
@@ -120,6 +120,56 @@ async function sendRegistrationFlow(pid, phone, vendorId, customerId, businessNa
       }
     }
   })
+}
+
+function computeCartDeliveryCharge(cart = [], policy = {}) {
+  return computeOrderDeliveryCharge(
+    cart.map((item) => ({
+      quantity: item.qty || item.quantity || 0,
+      order_type: item.order_type || "adhoc",
+    })),
+    policy
+  )
+}
+
+function buildCartOrderSummary(cart = [], deliveryCharge = 0, tomorrow, profile = {}) {
+  const lines = cart.map((item) => {
+    const cost = (parseFloat(item.price || 0) * parseFloat(item.qty || 0)).toFixed(2)
+    return `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} x ${item.qty} - Rs.${cost}`
+  }).join("\n")
+  const itemTotal = cart.reduce((sum, item) => sum + (parseFloat(item.price || 0) * parseFloat(item.qty || 0)), 0)
+  const grandTotal = (itemTotal + parseFloat(deliveryCharge || 0)).toFixed(2)
+  const deliveryLine = parseFloat(deliveryCharge || 0) > 0
+    ? `\n\u{1F69A} Delivery - Rs.${parseFloat(deliveryCharge || 0).toFixed(2)}`
+    : `\n\u{1F69A} Delivery - Free`
+  const timingParts = []
+  if (profile?.delivery_start) timingParts.push(formatTime12(profile.delivery_start))
+  if (profile?.delivery_end) timingParts.push(formatTime12(profile.delivery_end))
+  const timingLine = timingParts.length === 2
+    ? `\n\u{1F551} Delivery Time: ${timingParts[0]} to ${timingParts[1]}`
+    : ""
+
+  return `\u{1F4E6} *Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\n\u{1F4C5} Delivery Date: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`
+}
+
+function buildPlacedOrderFallback(cart = [], deliveryCharge = 0, tomorrow, addr = null, profile = {}) {
+  const lines = cart.map((item) =>
+    `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} x ${item.qty} - Rs.${(parseFloat(item.price || 0) * parseFloat(item.qty || 0)).toFixed(2)}`
+  ).join("\n")
+  const itemTotal = cart.reduce((sum, item) => sum + (parseFloat(item.price || 0) * parseFloat(item.qty || 0)), 0)
+  const grandTotal = (itemTotal + parseFloat(deliveryCharge || 0)).toFixed(2)
+  const deliveryLine = parseFloat(deliveryCharge || 0) > 0
+    ? `\n\u{1F69A} Delivery - Rs.${parseFloat(deliveryCharge || 0).toFixed(2)}`
+    : `\n\u{1F69A} Delivery - Free`
+  const timingParts = []
+  if (profile?.delivery_start) timingParts.push(formatTime12(profile.delivery_start))
+  if (profile?.delivery_end) timingParts.push(formatTime12(profile.delivery_end))
+  const timingLine = timingParts.length === 2
+    ? `\n\u{1F551} Delivery Time: ${timingParts[0]} to ${timingParts[1]}`
+    : ""
+  const addressLine = addr ? `\n\u{1F4CD} ${formatAddress(addr)}` : ""
+
+  return `\u{1F4E6} *Order Placed!*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*${addressLine}\n\u{1F4C5} Delivery Date: ${displayDate(tomorrow)}${timingLine}\n\nThank you!`
 }
 
 async function sendList(pid, phone, body, rows, btnLabel = "Select") {
@@ -1260,7 +1310,8 @@ async function handleCustomerBot(msg, pid) {
         // -- Adhoc: cart was saved by flow endpoint — show confirmation --
         const freshState = await getState(phone)
         const cart       = freshState?.temp_data?.flow_cart || []
-        const delCharge  = parseFloat(freshState?.temp_data?.flow_delivery_charge || 0)
+        const policy     = await getVendorDeliveryPolicy(vId)
+        const delCharge  = computeCartDeliveryCharge(cart, policy)
 
         if (cart.length === 0) {
           // Nothing entered in the flow
@@ -1272,20 +1323,9 @@ async function handleCustomerBot(msg, pid) {
           return
         }
 
-        const itemTotal  = cart.reduce((s, item) => s + item.price * item.qty, 0)
-        const grandTotal = itemTotal + delCharge
-        const lines      = cart.map(item => {
-          const cost = (item.price * item.qty).toFixed(2)
-          return `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — Rs.${cost}`
-        }).join("\n")
-        const delLine = delCharge > 0
-          ? `\n*Delivery Charge:* Rs.${delCharge.toFixed(2)}`
-          : `\n*Delivery:* Free`
-        const timingLine = formatDeliveryWindow(profile)
-
         const tom = istTomorrowStr()
         await sendButtons(pid, phone,
-          `*Order Summary*\n\n${lines}${delLine}\n\n*Total: Rs.${grandTotal.toFixed(2)}*\nDelivery: ${displayDate(tom)}${timingLine}\n\nConfirm your order?`,
+          buildCartOrderSummary(cart, delCharge, tom, profile),
           [
             { id: "flow_confirm_order", title: "Confirm Order" },
             { id: "flow_cancel_order",  title: "Cancel"        },
@@ -1974,21 +2014,25 @@ async function handleCustomerBot(msg, pid) {
       `, [cId, vId, periodFrom, periodTo])
     }
 
-    await sendText(pid, phone,
-      `*Payment Recorded!*\n\n` +
-      `${periodLabel ? `Period: ${periodLabel}\n` : ""}` +
-      `Amount: Rs.${Number(totalAmount || 0).toFixed(2)}\n\n` +
-      `Thank you! Your vendor has been notified. `
-    )
-    await setState(phone, "menu", vId)
-    return
-  }
+      await sendText(pid, phone,
+        `*Payment Recorded!*\n\n` +
+        `${periodLabel ? `Period: ${periodLabel}\n` : ""}` +
+        `Amount: Rs.${Number(totalAmount || 0).toFixed(2)}\n\n` +
+        `Thank you! Your vendor has been notified. `
+      )
+      await setState(phone, "menu", vId)
+      const sub = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
 
   /* -- Flow adhoc order: confirmation step -- */
 
   if (state.state === "flow_adhoc_confirm") {
     const cart      = state.temp_data?.flow_cart || []
-    const delCharge = parseFloat(state.temp_data?.flow_delivery_charge || 0)
+    const policy    = await getVendorDeliveryPolicy(vId)
+    const delCharge = computeCartDeliveryCharge(cart, policy)
 
     if (input === "flow_cancel_order") {
       await sendText(pid, phone, "*Order cancelled.* No order has been placed.")
@@ -2049,21 +2093,9 @@ async function handleCustomerBot(msg, pid) {
     }
 
     // Any other input — re-show the confirmation
-    const itemTotal  = cart.reduce((s, i) => s + i.price * i.qty, 0)
-    const grandTotal = itemTotal + delCharge
-    const lines      = cart.map(item => {
-      const cost = (item.price * item.qty).toFixed(2)
-      return `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — Rs.${cost}`
-    }).join("\n")
-    const delLine = delCharge > 0
-      ? `\n*Delivery Charge:* Rs.${delCharge.toFixed(2)}`
-      : `\n*Delivery:* Free`
-
-    const timingLine = formatDeliveryWindow(profile)
     const tomorrow = getISTDateStr(1)
-
     await sendButtons(pid, phone,
-      `*Order Summary*\n\n${lines}${delLine}\n\n*Total: Rs.${grandTotal.toFixed(2)}*\nDelivery: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+      buildCartOrderSummary(cart, delCharge, tomorrow, profile),
       [
         { id: "flow_confirm_order", title: "Confirm Order" },
         { id: "flow_cancel_order",  title: "Cancel"        },
@@ -2195,22 +2227,15 @@ async function handleCustomerBot(msg, pid) {
 
     // "Place Order" — confirm everything in cart
     if (input === "adhoc_place_order") {
-      const deliveryCharge = parseFloat(settings.adhoc_delivery_charge || 0)
+      const policy = await getVendorDeliveryPolicy(vId)
+      const deliveryCharge = computeCartDeliveryCharge(cart, policy)
       if (cart.length === 0) {
         await sendText(pid, phone, "Your cart is empty. Please select a product first.")
         return
       }
-      // Build summary and go to confirm state
-      const lines = cart.map(item =>
-        `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — Rs.${(item.price * item.qty).toFixed(2)}`
-      ).join("\n")
-      const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + deliveryCharge).toFixed(2)
-      const deliveryLine = deliveryCharge > 0 ? `\nDelivery: Rs.${deliveryCharge.toFixed(2)}` : `\nDelivery: Free`
-      const timingLine = formatDeliveryWindow(profile)
       const tomorrow = getISTDateStr(1)
-
       await sendButtons(pid, phone,
-        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\nDelivery Date: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+        buildCartOrderSummary(cart, deliveryCharge, tomorrow, profile),
         [
           { id: "adhoc_confirm", title: "Confirm Order" },
           { id: "adhoc_more",    title: "Add More"      },
@@ -2299,17 +2324,11 @@ async function handleCustomerBot(msg, pid) {
     }
 
     if (input === "adhoc_place_order") {
-      const deliveryCharge = parseFloat(settings.adhoc_delivery_charge || 0)
-      const lines = cart.map(item =>
-        `• ${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty} — Rs.${(item.price * item.qty).toFixed(2)}`
-      ).join("\n")
-      const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + deliveryCharge).toFixed(2)
-      const deliveryLine = deliveryCharge > 0 ? `\nDelivery: Rs.${deliveryCharge.toFixed(2)}` : `\nDelivery: Free`
-      const timingLine = formatDeliveryWindow(profile)
+      const policy = await getVendorDeliveryPolicy(vId)
+      const deliveryCharge = computeCartDeliveryCharge(cart, policy)
       const tomorrow = getISTDateStr(1)
-
       await sendButtons(pid, phone,
-        `*Order Summary*\n\n${lines}${deliveryLine}\n\n*Total: Rs.${grandTotal}*\nDelivery Date: ${displayDate(tomorrow)}${timingLine}\n\nConfirm your order?`,
+        buildCartOrderSummary(cart, deliveryCharge, tomorrow, profile),
         [
           { id: "adhoc_confirm", title: "Confirm Order" },
           { id: "adhoc_more",    title: "Add More"      },
@@ -2393,18 +2412,13 @@ async function handleCustomerBot(msg, pid) {
       [orderId]
     )
     const orderDelivery = parseFloat(orderAfterRows[0]?.delivery_charge_amount || 0)
-    const grandTotal = (cart.reduce((s, item) => s + item.price * item.qty, 0) + orderDelivery).toFixed(2)
-    const itemLines  = cart.map(item =>
-      `${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
-    ).join("\n")
-    const deliveryLine = orderDelivery > 0 ? `\nDelivery: Rs.${orderDelivery.toFixed(2)}` : `\nDelivery: Free`
     const timingLine = formatDeliveryWindow(profile)
 
     const summary = await buildResumeSummary(cId, vId, withProducts)
-    await sendText(pid, phone,
-      `*Order Placed!*\n\n${summary || `${itemLines}${deliveryLine}\n\nTotal: Rs.${grandTotal}\n${formatAddress(addr)}`}\n\n` +
-      `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
-    )
+    const successText = summary
+      ? `*Order Placed!*\n\n${summary}\n\nYour order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
+      : buildPlacedOrderFallback(cart, orderDelivery, tomorrow, addr, profile)
+    await sendText(pid, phone, successText)
 
     const sub   = await getSubscription(cId, vId)
     const pause = await getActivePause(cId, vId)

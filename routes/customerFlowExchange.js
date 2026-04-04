@@ -5,6 +5,7 @@ const path_    = require("path")
 const axios    = require("axios")
 const pool     = require("../db")
 const { generateOrdersForVendor } = require("../services/orderGenerator")
+const { getVendorDeliveryPolicy, computeOrderDeliveryCharge } = require("../services/orderPricing")
 
 const router = express.Router()
 
@@ -315,12 +316,6 @@ router.post("/", async (req, res) => {
 
         if (mode === "adhoc") {
           /* ── Adhoc: store cart in temp_data for confirmation step ── */
-          const { rows: settingsRows } = await pool.query(
-            "SELECT adhoc_delivery_charge FROM vendor_settings WHERE vendor_id=$1",
-            [vendorId]
-          )
-          const deliveryCharge = parseFloat(settingsRows[0]?.adhoc_delivery_charge || 0)
-
           const cartItems = []
           for (let i = 0; i < products.length; i++) {
             const p   = products[i]
@@ -339,6 +334,11 @@ router.post("/", async (req, res) => {
           }
 
           if (cartItems.length > 0) {
+            const policy = await getVendorDeliveryPolicy(vendorId)
+            const deliveryCharge = computeOrderDeliveryCharge(
+              cartItems.map((item) => ({ quantity: item.qty, order_type: "adhoc" })),
+              policy
+            )
             /* Store cart in customer's conversation_state temp_data */
             await pool.query(`
               UPDATE conversation_state
