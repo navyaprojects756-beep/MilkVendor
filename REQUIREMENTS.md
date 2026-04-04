@@ -1,7 +1,7 @@
 # MilkWhatsAppBot - Current Requirements And Change Log
 
 > Last updated: 2026-04-04  
-> This file reflects the current backend and frontend behavior after the recent WhatsApp flow, pause/resume, delivery charge, IST timezone, messaging, and vendor onboarding updates.
+> This file reflects the current backend and frontend behavior after the recent WhatsApp flow, pause/resume, delivery charge, IST timezone, messaging, vendor onboarding, and vendor notice-template updates.
 
 ---
 
@@ -382,23 +382,69 @@ The platform should also support vendor-to-customer operational notices for case
 - no delivery for a selected date range
 - temporary route or supply interruption
 
-Recommended implementation direction:
+Implemented notice-sending behavior:
 
-- add a vendor dashboard notice-sending page or action
-- allow targeting:
-  - all active customers
-  - filtered customers
+- A dedicated vendor dashboard Notices page is now available.
+- Notices are separate from the one-to-one Messages reply flow.
+- Vendor can send WhatsApp template notices to filtered customers.
+- Supported customer targeting is driven by filters:
+  - name / phone / address search
+  - all locations
+  - individual houses only
   - apartment-wise customers
   - block-wise customers
-  - selected customers
-- store notice history for audit and troubleshooting
-- keep this feature separate from the current one-to-one Messages reply flow
+  - date range filter
+- Notices page shows:
+  - filtered customer count
+  - customers who still need to pay
+  - outstanding total for the filtered range
+  - recent notice history
+- Notice sends are logged in DB for audit and troubleshooting.
+
+Implemented notice templates:
+
+- `delivery_unavailable_date`
+- `delivery_unavailable_from_to`
+- `payment_due_reminder`
+
+Template handling rules:
+
+- Template definitions are maintained in DB, not hardcoded only in frontend.
+- Frontend sends only safe values such as:
+  - `template_key`
+  - `reason_code`
+  - date inputs
+  - filters
+- Backend validates those values against DB before sending.
+- For `payment_due_reminder`, backend calculates the outstanding amount from filtered customer data and does not trust frontend amount input.
+- Template language is read from DB and send logic now supports fallback language handling when Meta is strict about locale codes.
+
+Notice reasons are maintained in DB:
+
+- reasons are stored as backend-controlled option values with:
+  - `reason_code`
+  - `display_name`
+  - `message_text`
+- frontend should display `display_name`
+- frontend should send only `reason_code`
+- backend rejects unknown `reason_code` values
+
+Current seeded notice reasons:
+
+- `vehicle_issue`
+- `milk_quality_issue`
+- `supplier_issue`
+- `maintenance_work`
+- `weather_issue`
+- `holiday`
+- `other_operational_issue`
 
 WhatsApp policy direction:
 
 - normal free-text replies are allowed inside the active 24-hour customer service window
 - proactive business-initiated notices outside that window require approved WhatsApp templates
 - for multi-customer operational notices, template-based sending is the safer long-term model
+- if Meta classifies a template differently, the system must respect the approved category rather than trying to bypass it
 
 ### Settings page
 
@@ -446,10 +492,28 @@ Current vendor mapping expectation:
 - Registration currently uses direct interactive flow, not template-based sending.
 - Product selection and profile update also use direct interactive flows.
 - If business-initiated messaging is needed outside the active session window, templates are still required by Meta.
+- Approved notice templates can be reused across vendor phone numbers when those numbers belong to the same WhatsApp Business Account context.
 - When phone numbers are spread across different WhatsApp account contexts, the same flow/template may need to be created there too.
 - WhatsApp Flow encryption public key upload is done per `phone_number_id`, not just once globally.
 - Each vendor sender number that uses flows must have the business public key uploaded.
 - `uploadPublicKey.js` now uploads the flow public key for all `vendors.phone_number_id` values, or for one phone number when passed as an argument.
+
+### Current notice template tables
+
+- `whatsapp_notice_reasons`
+- `whatsapp_notice_templates`
+- `vendor_notice_batches`
+- `vendor_notice_recipients`
+
+### Current notice template page and routes
+
+- frontend page:
+  - `vendor-dashboard/src/dashboard/pages/Notices.jsx`
+- backend routes:
+  - `GET /vendor/notices/config`
+  - `GET /vendor/notices/audience`
+  - `GET /vendor/notices/history`
+  - `POST /vendor/notices/send`
 
 ### Current flow endpoints
 
