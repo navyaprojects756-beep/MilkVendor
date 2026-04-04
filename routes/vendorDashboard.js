@@ -274,7 +274,7 @@ router.get("/orders", async (req, res) => {
           ELSE cv.manual_address
         END AS address,
         o.quantity,
-        o.order_date,
+        o.order_date::text AS order_date,
         a.name   AS apartment_name,
         a.name   AS apartment,
         b.block_name,
