@@ -877,10 +877,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
         { id: "profile",         title: "Profile",         description: "View or update your details" }
       )
     } else {
-      rows.push(
-        { id: "subscribe", title: "Subscribe Now", description: "Start daily milk delivery" },
-        { id: "profile",   title: "Profile",       description: "View or update your details" }
-      )
+      rows.push({ id: "profile", title: "Profile", description: "View or update your details" })
     }
   } else if (sub.status === "active" && pause) {
     const details = pause.pause_until
@@ -897,14 +894,12 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     rows = [
       { id: "view",        title: "View Orders & Plan", description: "View subscription and order details" },
       { id: "profile",     title: "Profile",           description: "View or update your details" },
-      { id: "pause",       title: "? Pause Delivery",     description: "Skip delivery for some days" },
+      { id: "pause",       title: "Pause Delivery",     description: "Skip delivery for some days" },
       { id: "get_invoice", title: "Get Bill",          description: "Download your bill"          },
     ]
     if (withProducts) {
       rows.splice(1, 0, { id: "manage_products", title: "Change Daily Products", description: "Update your daily delivery products" })
       rows.splice(2, 0, { id: "adhoc_order",     title: "Order Tomorrow",        description: "Order extra products for tomorrow" })
-    } else {
-      rows.splice(1, 0, { id: "change", title: "Change Quantity", description: "Update daily packets" })
     }
   } else {
     header = showPrompt ? `*${name}*\n\nHow can we help you today?` : `*${name}*`
@@ -918,11 +913,6 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     )
     if (withProducts) {
       rows.unshift({ id: "manage_products", title: "Daily Subscription", description: "Choose your daily delivery products" })
-    } else {
-      rows.unshift(
-        { id: "resume",  title: "Resume Delivery",  description: `Continue with ${sub.quantity} packet/day` },
-        { id: "change",  title: "Change & Resume",  description: "Pick new quantity and restart"            }
-      )
     }
   }
 
@@ -1000,7 +990,7 @@ async function sendAdhocProductList(pid, phone, vendorId, cart = []) {
     : `\n\nTap a product to add it to your order:`
 
   if (cartCount > 0) {
-    rows.push({ id: "adhoc_place_order", title: "? Place Order" })
+    rows.push({ id: "adhoc_place_order", title: "Place Order" })
   }
   rows.push({ id: "menu", title: "Main Menu" })
 
@@ -1215,8 +1205,8 @@ async function handleCustomerBot(msg, pid) {
 
     const isUpdate = !!(await getAddress(cId, vId)) && state?.state === "awaiting_registration" && state?.temp_data?.after_addr === false
     const confirmMsg = isUpdate
-      ? `? *Address updated!*\n\nYour delivery address has been saved.`
-      : `? *Registration complete!*\n\nWelcome${name ? `, ${name}` : ""}! \n\nYour address has been saved. You can now subscribe to daily deliveries.`
+      ? `*Address updated!*\n\nYour delivery address has been saved.`
+      : `*Registration complete!*\n\nWelcome${name ? `, ${name}` : ""}!\n\nYour address has been saved.`
 
     await sendText(pid, phone, confirmMsg)
     const sub   = await getSubscription(cId, vId)
@@ -1333,6 +1323,11 @@ async function handleCustomerBot(msg, pid) {
 
     // Subscribe (new or re-subscribe)
     if (input === "subscribe") {
+      if (!withProducts) {
+        await sendText(pid, phone, "Daily products are not available for this vendor right now.")
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       const addr = await getAddress(cId, vId)
       if (!addr) {
         await sendText(pid, phone, "*First, let's save your delivery address.*\n\nThis only takes a moment!")
@@ -1414,6 +1409,11 @@ async function handleCustomerBot(msg, pid) {
 
     // Change quantity
     if (input === "change") {
+      if (!withProducts) {
+        await sendText(pid, phone, "Daily products are not available for this vendor right now.")
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       const maxQty = settings.max_quantity_per_order || 5
       const price  = settings.price_per_unit || 0
       await sendQtyMenu(pid, phone, "chg", maxQty, price)
@@ -1471,6 +1471,11 @@ async function handleCustomerBot(msg, pid) {
 
     // Resume inactive subscription
     if (input === "resume") {
+      if (!withProducts) {
+        await sendText(pid, phone, "Daily products are not available for this vendor right now.")
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       await pool.query(
         "UPDATE subscriptions SET status='active' WHERE customer_id=$1 AND vendor_id=$2",
         [cId, vId]
@@ -1650,7 +1655,7 @@ async function handleCustomerBot(msg, pid) {
       await setState(phone, "flat", vId, temp)
     } else {
       await saveApartment(cId, vId, temp.aptId, blockId, null)
-      await sendText(pid, phone, "? *Address Saved!*\n\nYour delivery address has been updated.")
+      await sendText(pid, phone, "*Address Saved!*\n\nYour delivery address has been updated.")
       await afterAddressComplete(pid, phone, cId, vId, profile, settings, temp.after_addr, withProducts)
     }
     return
@@ -1666,7 +1671,7 @@ async function handleCustomerBot(msg, pid) {
     }
     const t = state.temp_data || {}
     await saveApartment(cId, vId, t.aptId, t.blockId, flat)
-    await sendText(pid, phone, "? *Address Saved!*\n\nYour delivery address has been updated.")
+    await sendText(pid, phone, "*Address Saved!*\n\nYour delivery address has been updated.")
     await afterAddressComplete(pid, phone, cId, vId, profile, settings, t.after_addr, withProducts)
     return
   }
@@ -1684,7 +1689,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
     await saveManual(cId, vId, address)
-    await sendText(pid, phone, "? *Address Saved!*\n\nYour delivery address has been updated.")
+    await sendText(pid, phone, "*Address Saved!*\n\nYour delivery address has been updated.")
     await afterAddressComplete(pid, phone, cId, vId, profile, settings, state.temp_data?.after_addr, withProducts)
     return
   }
@@ -1814,7 +1819,7 @@ async function handleCustomerBot(msg, pid) {
       `*Amount Due: Rs.${unpaidAmount.toFixed(2)}*\n\n` +
       `Already paid? Tap *Mark as Paid* and we'll record it.`,
       [
-        { id: "confirm_pay", title: "? Mark as Paid" },
+        { id: "confirm_pay", title: "Mark as Paid" },
         { id: "menu",        title: "Main Menu"   },
       ]
     )
@@ -2194,7 +2199,7 @@ async function handleCustomerBot(msg, pid) {
     await sendButtons(pid, phone,
       `*Cart Updated!*\n\n${cartLines}\n\nDo you want to add more items or place the order?`,
       [
-        { id: "adhoc_place_order", title: "? Place Order" },
+        { id: "adhoc_place_order", title: "Place Order" },
         { id: "adhoc_add_more",    title: "? Add More"    },
       ]
     )
@@ -2239,7 +2244,7 @@ async function handleCustomerBot(msg, pid) {
     await sendButtons(pid, phone,
       `*Your Cart:*\n\n${cartLines}\n\nWhat would you like to do?`,
       [
-        { id: "adhoc_place_order", title: "? Place Order" },
+        { id: "adhoc_place_order", title: "Place Order" },
         { id: "adhoc_add_more",    title: "? Add More"    },
       ]
     )
