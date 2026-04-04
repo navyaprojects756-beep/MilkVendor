@@ -78,7 +78,7 @@ async function sendAddressUpdateFlow(pid, phone, vendorId, customerId, businessN
   const nameLine = currentName ? `*Name:* ${currentName}\n` : ""
   const addrLine = currentAddr ? `*Current:* ${currentAddr}\n` : ""
   const currentSummary = nameLine || addrLine ? `${nameLine}${addrLine}\n` : ""
-  await sendWhatsApp(pid, {
+  return await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
     to:   phone,
     type: "interactive",
