@@ -1812,6 +1812,13 @@ router.post("/whatsapp-flow-data", async (req, res) => {
     // Decrypt every request (ping is also encrypted per Meta spec)
     const { decryptedAesKey, iv, payload } = decryptFlowRequest(parsed)
     const { action, screen, data: flowData } = payload
+    console.log("[REG FLOW RECV]", JSON.stringify({
+      action,
+      screen: screen || null,
+      flow_token: payload?.flow_token || null,
+      data_keys: Object.keys(flowData || {}),
+      data: flowData || {}
+    }, null, 2))
 
     let responsePayload = {}
 
@@ -1837,6 +1844,7 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             manual_address: prefill.profile?.manual_address || "",
           },
         }
+        console.log("[REG FLOW RESP INIT]", JSON.stringify(responsePayload, null, 2))
 
       } else if (screen === "WELCOME") {
         // User submitted name + address type
@@ -1865,6 +1873,7 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             },
           }
         }
+        console.log("[REG FLOW RESP WELCOME]", JSON.stringify(responsePayload, null, 2))
 
       } else if (screen === "APARTMENT_ADDRESS") {
         // User selected apartment — load blocks
@@ -1890,6 +1899,7 @@ router.post("/whatsapp-flow-data", async (req, res) => {
             blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
           },
         }
+        console.log("[REG FLOW RESP APT]", JSON.stringify(responsePayload, null, 2))
       }
     }
 
