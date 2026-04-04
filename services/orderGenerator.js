@@ -7,6 +7,7 @@ const { getVendorDeliveryPolicy, refreshOrderTotals } = require("./orderPricing"
  */
 async function generateForDate(vendorId, targetDate, hasProducts) {
   const d = targetDate // "YYYY-MM-DD"
+  const todayStr = localDateStr(getISTNow())
 
   if (hasProducts) {
     // ── Step 1: Create/update orders for customers with active product subscriptions ──
@@ -26,6 +27,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
         ON s.customer_id = cs.customer_id AND s.vendor_id = cs.vendor_id AND s.status = 'active'
       WHERE cs.vendor_id = $1
         AND cs.is_active = true
+        AND ($2::date <> $3::date OR cs.created_at < $2::date)
         AND NOT EXISTS (
           SELECT 1 FROM subscription_pauses sp
           WHERE sp.customer_id = cs.customer_id
@@ -37,7 +39,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
       ON CONFLICT (customer_id, vendor_id, order_date)
       DO UPDATE SET quantity = EXCLUDED.quantity
       WHERE orders.is_delivered = false
-    `, [vendorId, d])
+    `, [vendorId, d, todayStr])
 
     // ── Step 2: Create/update order_items ──
     await pool.query(`
@@ -55,6 +57,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
       JOIN products p ON p.product_id = cs.product_id AND p.is_active = true
       WHERE cs.vendor_id   = $1
         AND cs.is_active   = true
+        AND ($2::date <> $3::date OR cs.created_at < $2::date)
         AND o.is_delivered = false
         AND NOT EXISTS (
           SELECT 1 FROM subscription_pauses sp
@@ -68,7 +71,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
         quantity                 = EXCLUDED.quantity,
         price_at_order           = EXCLUDED.price_at_order,
         delivery_charge_at_order = 0
-    `, [vendorId, d])
+    `, [vendorId, d, todayStr])
 
     // ── Step 3: Remove subscription items for deactivated subscriptions ──
     await pool.query(`

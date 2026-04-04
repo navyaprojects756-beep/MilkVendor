@@ -494,6 +494,60 @@ async function saveSubscription(cId, vId, qty) {
   `, [cId, vId, qty])
 }
 
+async function cleanupTodaySubscriptionOrders(cId, vId) {
+  const today = getISTDateStr(0)
+  await pool.query(`
+    DELETE FROM order_items oi
+    USING orders o
+    WHERE oi.order_id = o.order_id
+      AND o.customer_id = $1
+      AND o.vendor_id = $2
+      AND o.order_date = $3::date
+      AND o.is_delivered = false
+      AND o.created_at::date = $3::date
+      AND oi.order_type = 'subscription'
+  `, [cId, vId, today])
+
+  await pool.query(`
+    DELETE FROM orders o
+    WHERE o.customer_id = $1
+      AND o.vendor_id = $2
+      AND o.order_date = $3::date
+      AND o.is_delivered = false
+      AND o.created_at::date = $3::date
+      AND NOT EXISTS (
+        SELECT 1 FROM order_items oi WHERE oi.order_id = o.order_id
+      )
+  `, [cId, vId, today])
+}
+
+async function cleanupTodayAdhocOrders(cId, vId) {
+  const today = getISTDateStr(0)
+  await pool.query(`
+    DELETE FROM order_items oi
+    USING orders o
+    WHERE oi.order_id = o.order_id
+      AND o.customer_id = $1
+      AND o.vendor_id = $2
+      AND o.order_date = $3::date
+      AND o.is_delivered = false
+      AND o.created_at::date = $3::date
+      AND oi.order_type = 'adhoc'
+  `, [cId, vId, today])
+
+  await pool.query(`
+    DELETE FROM orders o
+    WHERE o.customer_id = $1
+      AND o.vendor_id = $2
+      AND o.order_date = $3::date
+      AND o.is_delivered = false
+      AND o.created_at::date = $3::date
+      AND NOT EXISTS (
+        SELECT 1 FROM order_items oi WHERE oi.order_id = o.order_id
+      )
+  `, [cId, vId, today])
+}
+
 async function getAddress(cId, vId) {
   const r = await pool.query(`
     SELECT cv.*, a.name AS apartment_name, b.block_name
@@ -813,36 +867,84 @@ async function restorePausedOrders(cId, vId) {
   }
 }
 
-async function buildResumeSummary(cId, vId, withProducts, restored = null) {
+async function buildOrdersPlanText(cId, vId, withProducts, options = {}) {
+  const {
+    title = `\u{1F4CB} *Your Orders & Plan*`,
+    restored = null,
+    pause = null,
+  } = options
+
   const addr = await getAddress(cId, vId)
+  const sub = await getSubscription(cId, vId)
   const lines = []
+
+  if (title) lines.push(title, "")
 
   if (withProducts) {
     const prodSubs = await getCustomerProductSubs(cId, vId)
     const activeProdSubs = prodSubs.filter((s) => s.is_active && parseFloat(s.quantity || 0) > 0)
-    if (activeProdSubs.length) {
-      lines.push("*Daily Products:*")
+    if (activeProdSubs.length > 0) {
       activeProdSubs.forEach((s) => {
-        lines.push(`• ${s.name}${s.unit ? ` (${s.unit})` : ""} — ${s.quantity}/day`)
+        const dailyCost = (parseFloat(s.price || 0) * parseFloat(s.quantity || 0)).toFixed(0)
+        lines.push(`\u{1F4E6} *${s.name}${s.unit ? ` (${s.unit})` : ""}* — ${s.quantity}/day · Rs.${dailyCost}/day`)
       })
+    } else {
+      lines.push(`No active daily subscriptions.`)
     }
+  } else if (sub) {
+    lines.push(`Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day`)
+  } else {
+    lines.push(`No active daily subscription.`)
   }
 
-  const adhocOrders = await getUpcomingAdhocOrders(cId, vId, restored)
-  adhocOrders.forEach((adhocOrder) => {
-    if (lines.length) lines.push("")
-    lines.push(`*Tomorrow Order (${displayDate(adhocOrder.orderDate)}):*`)
-    adhocOrder.items.forEach((item) => {
-      lines.push(`• ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity}`)
+  if (addr) lines.push(``, `\u{1F4CD} Address: ${formatAddress(addr)}`)
+
+  if (sub && pause) {
+    lines.push(
+      ``,
+      pause.pause_until
+        ? `\u{23F8} Status: Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}`
+        : `\u{23F8} Status: Paused until you resume`
+    )
+  } else if (sub) {
+    lines.push(``, `\u{2705} Status: Active`)
+  } else {
+    lines.push(``, `No daily subscription active`)
+  }
+
+  const sections = await getUpcomingOrderSections(cId, vId)
+  if (!sections.length && restored?.nextAdhocDate && restored?.adhocItems?.length) {
+    sections.push({
+      orderDate: restored.nextAdhocDate,
+      deliveryCharge: 0,
+      dailyItems: [],
+      adhocItems: restored.adhocItems.map((item) => ({
+        quantity: item.quantity,
+        price_at_order: item.price_at_order,
+        name: item.product_name || item.name || `Product #${item.product_id}`,
+        unit: item.product_unit || item.unit || "",
+      })),
     })
+  }
+
+  sections.forEach((section) => {
+    lines.push("", `\u{1F4E6} *Upcoming Order for ${displayDate(section.orderDate)}:*`)
+    section.dailyItems.forEach((item) => {
+      const cost = (parseFloat(item.price_at_order || 0) * parseFloat(item.quantity || 0)).toFixed(0)
+      lines.push(`• [Daily] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — Rs.${cost}`)
+    })
+    section.adhocItems.forEach((item) => {
+      const cost = (parseFloat(item.price_at_order || 0) * parseFloat(item.quantity || 0)).toFixed(0)
+      lines.push(`• [Extra] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — Rs.${cost}`)
+    })
+    lines.push(`\u{1F69A} Delivery — ${parseFloat(section.deliveryCharge || 0) > 0 ? `Rs.${parseFloat(section.deliveryCharge || 0).toFixed(2)}` : `Free`}`)
   })
 
-  if (addr) {
-    if (lines.length) lines.push("")
-    lines.push(`${formatAddress(addr)}`)
-  }
-
   return lines.join("\n")
+}
+
+async function buildResumeSummary(cId, vId, withProducts, restored = null) {
+  return buildOrdersPlanText(cId, vId, withProducts, { restored })
 }
 
 async function deletePause(pauseId) {
@@ -1064,6 +1166,7 @@ async function startAddressFlow(pid, phone, customerId, vendor, afterAddr = fals
 
 async function confirmQty(pid, phone, cId, vId, qty, price, profile, withProducts = false) {
   await saveSubscription(cId, vId, qty)
+  await cleanupTodaySubscriptionOrders(cId, vId)
   const addr  = await getAddress(cId, vId)
   const pause = await getActivePause(cId, vId)
 
@@ -1200,9 +1303,10 @@ async function handleCustomerBot(msg, pid) {
       const subSaved   = freshState?.temp_data?.flow_sub_saved
       const sub        = await getSubscription(cId, vId)
       const pause      = await getActivePause(cId, vId)
+      const summary = await buildResumeSummary(cId, vId, withProducts)
       const confirmMsg = subSaved
-        ? `*Products updated!*\n\nYour daily subscriptions have been saved.`
-        : `*No changes detected.*\n\nYour subscriptions remain the same.`
+        ? `*Products updated!*\n\n${summary || "Your daily subscriptions have been saved."}`
+        : `*No changes detected.*\n\n${summary || "Your subscriptions remain the same."}`
       await sendText(pid, phone, confirmMsg)
       await setState(phone, "menu", vId)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -1362,7 +1466,6 @@ async function handleCustomerBot(msg, pid) {
 
     // View subscription
     if (input === "view") {
-      const addr     = await getAddress(cId, vId)
       const prodSubs = withProducts ? await getCustomerProductSubs(cId, vId) : []
       const activeProdSubs = prodSubs.filter(s => s.is_active && parseFloat(s.quantity || 0) > 0)
       const hasViewData = !!sub || activeProdSubs.length > 0 || !!(await getMenuContextByPhone(phone, vId)).hasOrders
@@ -1373,54 +1476,7 @@ async function handleCustomerBot(msg, pid) {
         return
       }
 
-      let text = `*Your Orders & Plan*\n\n`
-
-      if (withProducts) {
-        if (activeProdSubs.length > 0) {
-          activeProdSubs.forEach(s => {
-            const dailyCost = (parseFloat(s.price) * s.quantity).toFixed(0)
-            text += `*${s.name}${s.unit ? ` (${s.unit})` : ""}* — ${s.quantity}/day · Rs.${dailyCost}/day\n`
-          })
-        } else {
-          text += `No active daily subscriptions.\n`
-        }
-      } else if (sub) {
-        text += `Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day\n`
-      } else {
-        text += `No active daily subscription.\n`
-      }
-
-      text += `\nAddress: ${formatAddress(addr)}\n`
-      if (sub && pause) {
-        text += pause.pause_until
-          ? `\nStatus: Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}`
-          : `\nStatus: Paused until you resume`
-      } else if (sub) {
-        text += `\nStatus: Active`
-      } else {
-        text += `\nNo daily subscription active`
-      }
-
-      const upcomingOrders = await getUpcomingOrderSections(cId, vId)
-      upcomingOrders.forEach((order) => {
-        text += `\n\n*Upcoming Order for ${displayDate(order.orderDate)}:*\n`
-        order.dailyItems.forEach(item => {
-          const qty = parseFloat(item.quantity || 0)
-          const price = parseFloat(item.price_at_order || 0)
-          const cost = (qty * price).toFixed(0)
-          text += `• [Daily] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — Rs.${cost}\n`
-        })
-        order.adhocItems.forEach(item => {
-          const qty = parseFloat(item.quantity || 0)
-          const price = parseFloat(item.price_at_order || 0)
-          const cost = (qty * price).toFixed(0)
-          text += `• [Extra] ${item.name}${item.unit ? ` (${item.unit})` : ""} × ${item.quantity} — Rs.${cost}\n`
-        })
-        text += order.deliveryCharge > 0
-          ? `Delivery Charge - Rs.${order.deliveryCharge.toFixed(2)}\n`
-          : `Delivery - Free\n`
-      })
-
+      const text = await buildOrdersPlanText(cId, vId, withProducts, { pause })
       await sendText(pid, phone, text)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
       return
@@ -1953,6 +2009,7 @@ async function handleCustomerBot(msg, pid) {
       }
 
       const tomorrow = istTomorrowStr()
+      await cleanupTodayAdhocOrders(cId, vId)
 
       const { rows: orderRows } = await pool.query(`
         INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
@@ -1976,19 +2033,11 @@ async function handleCustomerBot(msg, pid) {
 
       await refreshOrderTotals(orderId)
 
-      const addr       = await getAddress(cId, vId)
-      const itemTotal  = cart.reduce((s, i) => s + i.price * i.qty, 0)
-      const grandTotal = itemTotal + delCharge
-      const itemLines  = cart.map(item =>
-        `${item.product_name}${item.product_unit ? ` (${item.product_unit})` : ""} × ${item.qty}`
-      ).join("\n")
-      const delLine = delCharge > 0 ? `\nDelivery: Rs.${delCharge.toFixed(2)}` : `\nDelivery: Free`
       const timingLine = formatDeliveryWindow(profile)
 
+      const summary = await buildResumeSummary(cId, vId, withProducts)
       await sendText(pid, phone,
-        `*Order Placed!*\n\n${itemLines}${delLine}\n\n` +
-        `Total: Rs.${grandTotal.toFixed(2)}\n` +
-        `${formatAddress(addr)}\n` +
+        `*Order Placed!*\n\n${summary}\n\n` +
         `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
       )
 
@@ -2310,6 +2359,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     const tomorrow = istTomorrowStr()
+    await cleanupTodayAdhocOrders(cId, vId)
 
     // Find or create order for tomorrow
     const { rows: orderRows } = await pool.query(`
@@ -2350,10 +2400,9 @@ async function handleCustomerBot(msg, pid) {
     const deliveryLine = orderDelivery > 0 ? `\nDelivery: Rs.${orderDelivery.toFixed(2)}` : `\nDelivery: Free`
     const timingLine = formatDeliveryWindow(profile)
 
+    const summary = await buildResumeSummary(cId, vId, withProducts)
     await sendText(pid, phone,
-      `*Order Placed!*\n\n${itemLines}${deliveryLine}\n\n` +
-      `Total: Rs.${grandTotal}\n` +
-      `${formatAddress(addr)}\n` +
+      `*Order Placed!*\n\n${summary || `${itemLines}${deliveryLine}\n\nTotal: Rs.${grandTotal}\n${formatAddress(addr)}`}\n\n` +
       `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
     )
 

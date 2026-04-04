@@ -8,6 +8,38 @@ const { generateOrdersForVendor } = require("../services/orderGenerator")
 
 const router = express.Router()
 
+function getISTDateStr(offsetDays = 0) {
+  const now = new Date()
+  const istNow = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000)
+  const date = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + offsetDays)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+}
+
+async function cleanupTodaySubscriptionOrders(customerId, vendorId) {
+  const today = getISTDateStr(0)
+  await pool.query(`
+    DELETE FROM order_items oi
+    USING orders o
+    WHERE oi.order_id = o.order_id
+      AND o.customer_id = $1
+      AND o.vendor_id = $2
+      AND o.order_date = $3::date
+      AND o.is_delivered = false
+      AND oi.order_type = 'subscription'
+  `, [customerId, vendorId, today])
+
+  await pool.query(`
+    DELETE FROM orders o
+    WHERE o.customer_id = $1
+      AND o.vendor_id = $2
+      AND o.order_date = $3::date
+      AND o.is_delivered = false
+      AND NOT EXISTS (
+        SELECT 1 FROM order_items oi WHERE oi.order_id = o.order_id
+      )
+  `, [customerId, vendorId, today])
+}
+
 /* ── Private key ── */
 let FLOW_PRIVATE_KEY = null
 if (process.env.FLOW_PRIVATE_KEY) {
@@ -358,6 +390,7 @@ router.post("/", async (req, res) => {
           }
 
           if (anyChanged) {
+            await cleanupTodaySubscriptionOrders(customerId, vendorId)
             /* Mark as saved so customerBot confirmation message is shown */
             await pool.query(`
               UPDATE conversation_state

@@ -861,7 +861,7 @@ router.get("/order-window/:vendorId", async (req, res) => {
 router.post("/generate-orders", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
-    await generateOrdersForVendor(vendorId)
+    await generateOrdersForVendor(vendorId, { includeToday: false, includeTomorrow: true })
     res.json({ message: "Orders generated" })
   } catch (err) {
     console.error(err)
