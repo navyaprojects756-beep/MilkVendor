@@ -2318,43 +2318,16 @@ async function getRegistrationPrefill(flowToken) {
 
 router.post("/whatsapp-flow-data", async (req, res) => {
   try {
-    console.log("[REG FLOW HTTP]", JSON.stringify({
-      method: req.method,
-      contentType: req.headers["content-type"] || null,
-      contentLength: req.headers["content-length"] || null,
-      bodyType: Buffer.isBuffer(req.body) ? "buffer" : typeof req.body,
-      hasPrivateKey: !!FLOW_PRIVATE_KEY,
-      privateKeySource: process.env.FLOW_PRIVATE_KEY ? "env" : "file_or_missing",
-    }))
-
     if (!FLOW_PRIVATE_KEY) {
-      console.error("[REG FLOW ERROR] Private key not configured")
       return res.status(500).send("Private key not configured")
     }
 
     let rawBody = req.body
     if (Buffer.isBuffer(rawBody)) rawBody = rawBody.toString("utf8")
-    console.log("[REG FLOW RAW]", JSON.stringify({
-      rawType: typeof rawBody,
-      rawLength: typeof rawBody === "string" ? rawBody.length : null,
-      rawPreview: typeof rawBody === "string" ? rawBody.slice(0, 180) : null,
-    }))
     const parsed = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody
-    console.log("[REG FLOW PARSED]", JSON.stringify({
-      parsedKeys: parsed && typeof parsed === "object" ? Object.keys(parsed) : [],
-      hasEncryptedAesKey: !!parsed?.encrypted_aes_key,
-      hasEncryptedFlowData: !!parsed?.encrypted_flow_data,
-      hasInitialVector: !!parsed?.initial_vector,
-    }))
 
     // Decrypt every request (ping is also encrypted per Meta spec)
     const { decryptedAesKey, iv, payload } = decryptFlowRequest(parsed)
-    console.log("[REG FLOW DECRYPT OK]", JSON.stringify({
-      aesKeyBytes: decryptedAesKey?.length || null,
-      ivBytes: iv?.length || null,
-      action: payload?.action || null,
-      screen: payload?.screen || null,
-    }))
     const { action, screen, data: flowData } = payload
     console.log("[REG FLOW RECV]", JSON.stringify({
       action,
@@ -2453,12 +2426,7 @@ router.post("/whatsapp-flow-data", async (req, res) => {
     res.send(encrypted)
 
   } catch (err) {
-    console.error("[REG FLOW CATCH]", JSON.stringify({
-      message: err.message,
-      stack: err.stack,
-      code: err.code || null,
-      name: err.name || null,
-    }))
+    console.error("Flow data exchange error:", err.message)
     res.status(500).send("Internal error")
   }
 })
