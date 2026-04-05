@@ -44,41 +44,45 @@
         "type": "SingleColumnLayout",
         "children": [
           {
-            "type": "TextInput",
-            "name": "customer_name",
-            "label": "Your Name",
-            "required": true,
-            "init-value": "${data.customer_name}"
-          },
-          {
-            "type": "RadioButtonsGroup",
-            "name": "address_type",
-            "label": "Address Type",
-            "required": true,
-            "init-value": "${data.address_type}",
-            "data-source": [
+            "type": "Form",
+            "name": "registration_intro",
+            "children": [
               {
-                "id": "apartment",
-                "title": "Apartment / Society"
+                "type": "TextInput",
+                "name": "customer_name",
+                "label": "Your Name",
+                "required": true
               },
               {
-                "id": "house",
-                "title": "Individual House"
+                "type": "RadioButtonsGroup",
+                "name": "address_type",
+                "label": "Address Type",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "apartment",
+                    "title": "Apartment / Society"
+                  },
+                  {
+                    "id": "house",
+                    "title": "Individual House"
+                  }
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Next",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "customer_name": "${form.customer_name}",
+                    "address_type": "${form.address_type}",
+                    "apartment_id": "${data.apartment_id}",
+                    "manual_address": "${data.manual_address}"
+                  }
+                }
               }
             ]
-          },
-          {
-            "type": "Footer",
-            "label": "Next",
-            "on-click-action": {
-              "name": "data_exchange",
-              "payload": {
-                "customer_name": "${form.customer_name}",
-                "address_type": "${form.address_type}",
-                "apartment_id": "${data.apartment_id}",
-                "manual_address": "${data.manual_address}"
-              }
-            }
           }
         ]
       }
@@ -120,23 +124,28 @@
         "type": "SingleColumnLayout",
         "children": [
           {
-            "type": "Dropdown",
-            "name": "apartment_id",
-            "label": "Apartment / Society",
-            "required": true,
-            "init-value": "${data.apartment_id}",
-            "data-source": "${data.apartments}"
-          },
-          {
-            "type": "Footer",
-            "label": "Next",
-            "on-click-action": {
-              "name": "data_exchange",
-              "payload": {
-                "customer_name": "${data.customer_name}",
-                "apartment_id": "${form.apartment_id}"
+            "type": "Form",
+            "name": "apartment_details",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "apartment_id",
+                "label": "Apartment / Society",
+                "required": true,
+                "data-source": "${data.apartments}"
+              },
+              {
+                "type": "Footer",
+                "label": "Next",
+                "on-click-action": {
+                  "name": "data_exchange",
+                  "payload": {
+                    "customer_name": "${data.customer_name}",
+                    "apartment_id": "${form.apartment_id}"
+                  }
+                }
               }
-            }
+            ]
           }
         ]
       }
@@ -187,33 +196,37 @@
         "type": "SingleColumnLayout",
         "children": [
           {
-            "type": "Dropdown",
-            "name": "block_id",
-            "label": "Block / Tower",
-            "required": true,
-            "init-value": "${data.block_id}",
-            "data-source": "${data.blocks}"
-          },
-          {
-            "type": "TextInput",
-            "name": "flat_number",
-            "label": "Flat Number",
-            "required": true,
-            "init-value": "${data.flat_number}"
-          },
-          {
-            "type": "Footer",
-            "label": "Submit",
-            "on-click-action": {
-              "name": "complete",
-              "payload": {
-                "customer_name": "${data.customer_name}",
-                "address_type": "apartment",
-                "apartment_id": "${data.apartment_id}",
-                "block_id": "${form.block_id}",
-                "flat_number": "${form.flat_number}"
+            "type": "Form",
+            "name": "flat_details",
+            "children": [
+              {
+                "type": "Dropdown",
+                "name": "block_id",
+                "label": "Block / Tower",
+                "required": true,
+                "data-source": "${data.blocks}"
+              },
+              {
+                "type": "TextInput",
+                "name": "flat_number",
+                "label": "Flat Number",
+                "required": true
+              },
+              {
+                "type": "Footer",
+                "label": "Submit",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "customer_name": "${data.customer_name}",
+                    "address_type": "apartment",
+                    "apartment_id": "${data.apartment_id}",
+                    "block_id": "${form.block_id}",
+                    "flat_number": "${form.flat_number}"
+                  }
+                }
               }
-            }
+            ]
           }
         ]
       }
@@ -236,23 +249,28 @@
         "type": "SingleColumnLayout",
         "children": [
           {
-            "type": "TextArea",
-            "name": "manual_address",
-            "label": "Delivery Address",
-            "required": true,
-            "init-value": "${data.manual_address}"
-          },
-          {
-            "type": "Footer",
-            "label": "Submit",
-            "on-click-action": {
-              "name": "complete",
-              "payload": {
-                "customer_name": "${data.customer_name}",
-                "address_type": "house",
-                "manual_address": "${form.manual_address}"
+            "type": "Form",
+            "name": "house_address",
+            "children": [
+              {
+                "type": "TextArea",
+                "name": "manual_address",
+                "label": "Delivery Address",
+                "required": true
+              },
+              {
+                "type": "Footer",
+                "label": "Submit",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "customer_name": "${data.customer_name}",
+                    "address_type": "house",
+                    "manual_address": "${form.manual_address}"
+                  }
+                }
               }
-            }
+            ]
           }
         ]
       }
