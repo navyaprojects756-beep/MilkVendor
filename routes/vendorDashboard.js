@@ -233,7 +233,9 @@ async function getNoticeAudience(vendorId, { from, to }) {
       cv.address_type,
       cv.flat_number,
       cv.manual_address,
+      a.apartment_id,
       a.name AS apartment_name,
+      b.block_id,
       b.block_name,
       CASE
         WHEN cv.address_type = 'apartment'
@@ -255,13 +257,13 @@ async function getNoticeAudience(vendorId, { from, to }) {
   return result.rows
 }
 
-function applyNoticeFilters(rows, { search = "", location = "", block = "", onlyNotPaid = false }) {
+function applyNoticeFilters(rows, { search = "", locationId = "", blockId = "", onlyNotPaid = false }) {
   const q = String(search || "").trim().toLowerCase()
   return rows.filter((row) => {
     if (onlyNotPaid && !(Number.parseFloat(row.outstanding || 0) > 0)) return false
-    if (location === "__individual__" && row.address_type === "apartment") return false
-    if (location && location !== "__individual__" && row.apartment_name !== location) return false
-    if (block && row.block_name !== block) return false
+    if (locationId === "__individual__" && row.address_type === "apartment") return false
+    if (locationId && locationId !== "__individual__" && String(row.apartment_id || "") !== String(locationId)) return false
+    if (blockId && String(row.block_id || "") !== String(blockId)) return false
     if (!q) return true
     return [
       row.customer_name,
@@ -443,8 +445,10 @@ router.get("/orders", async (req, res) => {
         END AS address,
         o.quantity,
         o.order_date::text AS order_date,
+        a.apartment_id,
         a.name   AS apartment_name,
         a.name   AS apartment,
+        b.block_id,
         b.block_name,
         COALESCE(
           json_agg(
@@ -480,7 +484,7 @@ router.get("/orders", async (req, res) => {
           )
         )
       GROUP BY o.order_id, o.is_delivered, o.delivered_at, c.name, c.phone,
-               cv.address_type, a.name, a.address, b.block_name, cv.flat_number,
+               cv.address_type, a.apartment_id, a.name, a.address, b.block_id, b.block_name, cv.flat_number,
                cv.manual_address, o.quantity, o.order_date
       ORDER BY o.order_date DESC
     `, [vendorId])
@@ -1055,6 +1059,7 @@ router.get("/customers", requireAdmin, async (req, res) => {
         a.name        AS apartment_name,
         a.apartment_id,
         b.block_name,
+        b.block_id,
         s.quantity    AS subscription_quantity,
         s.status      AS subscription_status,
         CASE
@@ -1312,7 +1317,9 @@ router.get("/payments-history", requireAdmin, async (req, res) => {
           cv.address_type,
           cv.flat_number,
           cv.manual_address,
+          a.apartment_id,
           a.name AS apartment_name,
+          b.block_id,
           b.block_name,
           CASE
             WHEN cv.address_type='apartment'
@@ -1376,7 +1383,9 @@ router.get("/payments-history", requireAdmin, async (req, res) => {
           cv.address_type,
           cv.flat_number,
           cv.manual_address,
+          a.apartment_id,
           a.name AS apartment_name,
+          b.block_id,
           b.block_name,
           CASE
             WHEN cv.address_type='apartment'
@@ -1584,7 +1593,9 @@ router.get("/pauses", requireAdmin, async (req, res) => {
         cv.address_type,
         cv.flat_number,
         cv.manual_address,
+        a.apartment_id,
         a.name       AS apartment_name,
+        b.block_id,
         b.block_name
       FROM subscription_pauses sp
       JOIN customers c ON c.customer_id = sp.customer_id
@@ -1858,7 +1869,9 @@ router.get("/messages", requireAdmin, async (req, res) => {
         cv.address_type,
         cv.flat_number,
         cv.manual_address,
+        a.apartment_id,
         a.name AS apartment_name,
+        b.block_id,
         b.block_name,
         CASE
           WHEN cv.address_type = 'apartment'
@@ -1939,7 +1952,9 @@ router.get("/messages/thread/:phone", requireAdmin, async (req, res) => {
         cv.address_type,
         cv.flat_number,
         cv.manual_address,
+        a.apartment_id,
         a.name AS apartment_name,
+        b.block_id,
         b.block_name,
         CASE
           WHEN cv.address_type = 'apartment'
@@ -2024,7 +2039,14 @@ router.get("/notices/config", requireAdmin, async (req, res) => {
       getNoticeAudience(vendorId, { from: getISTDateStr(0), to: getISTDateStr(0) }),
     ])
 
-    const apartments = [...new Set(audienceRows.filter((row) => row.address_type === "apartment").map((row) => row.apartment_name).filter(Boolean))]
+    const apartments = audienceRows
+      .filter((row) => row.address_type === "apartment" && row.apartment_id)
+      .reduce((acc, row) => {
+        if (!acc.some((item) => String(item.apartment_id) === String(row.apartment_id))) {
+          acc.push({ apartment_id: row.apartment_id, apartment_name: row.apartment_name })
+        }
+        return acc
+      }, [])
     res.json({ templates: templatesRes.rows, reasons: reasonsRes.rows, apartments })
   } catch (e) {
     res.status(500).json({ message: e.message })
@@ -2034,14 +2056,21 @@ router.get("/notices/config", requireAdmin, async (req, res) => {
 router.get("/notices/audience", requireAdmin, async (req, res) => {
   try {
     const vendorId = getVendorId(req)
-    const { from, to, search = "", location = "", block = "", template_key = "" } = req.query
+    const { from, to, location_id = "", block_id = "", template_key = "" } = req.query
     if (!from || !to) return res.status(400).json({ message: "from and to are required" })
 
     const allRows = await getNoticeAudience(vendorId, { from, to })
     const onlyNotPaid = template_key === "payment_due_reminder"
-    const customers = applyNoticeFilters(allRows, { search, location, block, onlyNotPaid })
-    const blocks = location && location !== "__individual__"
-      ? [...new Set(allRows.filter((row) => row.apartment_name === location).map((row) => row.block_name).filter(Boolean))]
+    const customers = applyNoticeFilters(allRows, { locationId: location_id, blockId: block_id, onlyNotPaid })
+    const blocks = location_id && location_id !== "__individual__"
+      ? allRows
+          .filter((row) => String(row.apartment_id || "") === String(location_id) && row.block_id)
+          .reduce((acc, row) => {
+            if (!acc.some((item) => String(item.block_id) === String(row.block_id))) {
+              acc.push({ block_id: row.block_id, block_name: row.block_name })
+            }
+            return acc
+          }, [])
       : []
 
     const summary = customers.reduce((acc, row) => {
@@ -2102,9 +2131,9 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
       notice_to,
       filter_from,
       filter_to,
-      search = "",
-      location = "",
-      block = "",
+      location_id = null,
+      block_id = null,
+      recipient_ids = [],
     } = req.body || {}
 
     const template = await getNoticeTemplateByKey(template_key)
@@ -2120,9 +2149,13 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
       if (!reason) return res.status(400).json({ message: "Invalid reason" })
     }
 
+    const recipientIdSet = new Set((Array.isArray(recipient_ids) ? recipient_ids : []).map((id) => String(id)).filter(Boolean))
+    if (!recipientIdSet.size) return res.status(400).json({ message: "recipient_ids are required" })
+
     const allRows = await getNoticeAudience(vendorId, { from, to })
     const onlyNotPaid = template_key === "payment_due_reminder"
-    const recipients = applyNoticeFilters(allRows, { search, location, block, onlyNotPaid }).filter((row) => row.customer_phone)
+    const recipients = applyNoticeFilters(allRows, { locationId: location_id, blockId: block_id, onlyNotPaid })
+      .filter((row) => recipientIdSet.has(String(row.customer_id)) && row.customer_phone)
     if (!recipients.length) return res.status(400).json({ message: "No customers match the selected filters" })
 
     const vendorRes = await pool.query("SELECT phone_number_id FROM vendors WHERE vendor_id = $1 LIMIT 1", [vendorId])
@@ -2131,7 +2164,7 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
 
     const batchRes = await pool.query(
       `INSERT INTO vendor_notice_batches
-         (vendor_id, template_key, reason_code, filter_from, filter_to, notice_date, notice_from, notice_to, location_filter, block_filter, search_text, recipient_scope, total_recipients, created_by_vendor_id)
+         (vendor_id, template_key, reason_code, filter_from, filter_to, notice_date, notice_from, notice_to, location_apartment_id, location_block_id, search_text, recipient_scope, total_recipients, created_by_vendor_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'filtered',$12,$1)
        RETURNING notice_batch_id`,
       [
@@ -2143,9 +2176,9 @@ router.post("/notices/send", requireAdmin, async (req, res) => {
         normalizeDateOnly(notice_date),
         normalizeDateOnly(notice_from),
         normalizeDateOnly(notice_to),
-        location || null,
-        block || null,
-        search || null,
+        location_id && location_id !== "__individual__" ? location_id : null,
+        block_id || null,
+        null,
         recipients.length,
       ]
     )
