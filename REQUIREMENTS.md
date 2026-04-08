@@ -176,7 +176,13 @@ Mode comes from `flow_token`:
 - Flow JSON can be reused across vendors when their phone numbers belong to the same WhatsApp Business Account context.
 - Product quantity fields now default to `0` instead of blank.
 - Only values greater than `0` are treated as active selected quantities.
-- User-facing “Leave blank…” helper text has been removed from product flows.
+- User-facing helper text telling the user to leave values blank should not appear in the local product flow source.
+- Product quantity flow title is now `Set Quantities` for both:
+  - `PRODUCT_LIST`
+  - `PRODUCT_LIST_ADHOC`
+- Daily product flow message text should now be:
+  - `Set your daily quantity for each product below.`
+- If old helper text still appears in WhatsApp, the Meta-hosted flow JSON has not yet been re-uploaded and re-published.
 
 ### Prefill rules
 
@@ -322,10 +328,14 @@ Orders page should support:
 
 - date filters
 - apartment and block filters
-- compact cards
+- compact mobile-first cards
 - row-wise expand/collapse
 - `Expand All`
 - `Collapse All`
+- filter section shown first
+- summary chips for order count, pending count, delivered count, and active date range
+- larger touch-friendly delivery status controls
+- cleaner mobile-friendly product totals
 
 User-friendly labels should be used instead of raw internal words:
 
@@ -337,6 +347,11 @@ Paused future orders should not appear in the active orders list.
 ### Customers page
 
 Customer billing and outstanding should always reflect the latest delivered values.
+
+Frontend direction:
+
+- Filters should use the same visual style as Orders page.
+- Filters should appear as the first section on the page.
 
 ### Products page
 
@@ -359,8 +374,12 @@ Pause page should show:
 - apartment/address
 - days left / manual resume
 - apartment filter
-
 Pause dates on dashboard must match WhatsApp pause dates exactly.
+
+Frontend direction:
+
+- Filters should use the same visual style as Orders page.
+- Filters should appear as the first section on the page.
 
 ### Messages page
 
@@ -372,6 +391,25 @@ Current behavior:
 - message thread shows customer name, phone, and address details
 - date/location filters are available on the messages page
 - vendor replies are text-only support replies in the current implementation
+
+Frontend direction:
+
+- Filters should use the same visual style as Orders page.
+- Filters should appear as the first section on the page.
+
+### Payments page
+
+Payments page should support:
+
+- customer payment review
+- payment status visibility
+- delivered-value based billing context
+- location/search/date filters where applicable
+
+Frontend direction:
+
+- Filters should use the same visual style as Orders page.
+- Filters should appear as the first section on the page.
 
 ### Future outbound vendor notices
 
@@ -399,6 +437,7 @@ Implemented notice-sending behavior:
   - customers who still need to pay
   - outstanding total for the filtered range
   - recent notice history
+- Notices page filters should follow the same UI direction as Orders page, with filters shown first.
 - Notice sends are logged in DB for audit and troubleshooting.
 
 Implemented notice templates:
@@ -527,6 +566,13 @@ Current vendor mapping expectation:
 - `flows/registration-flow.json`
 - `flows/product-list-flow.json`
 
+### Current product flow ids in local env
+
+- `REGISTRATION_FLOW_ID`
+- `PRODUCT_LIST_FLOW_ID`
+
+If product flow title/copy changes are made locally, the Meta-hosted flow tied to `PRODUCT_LIST_FLOW_ID` must also be updated and published before WhatsApp users will see the change.
+
 ---
 
 ## 12. Key Backend Files
@@ -547,6 +593,8 @@ Current vendor mapping expectation:
 - `vendor-dashboard/src/App.jsx`
 - `vendor-dashboard/src/dashboard/pages/Orders.jsx`
 - `vendor-dashboard/src/dashboard/pages/Customers.jsx`
+- `vendor-dashboard/src/dashboard/pages/Payments.jsx`
+- `vendor-dashboard/src/dashboard/pages/Notices.jsx`
 - `vendor-dashboard/src/dashboard/pages/Products.jsx`
 - `vendor-dashboard/src/dashboard/pages/Pauses.jsx`
 - `vendor-dashboard/src/dashboard/pages/Messages.jsx`
