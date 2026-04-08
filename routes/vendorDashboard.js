@@ -442,6 +442,7 @@ router.get("/orders", async (req, res) => {
         o.order_id,
         o.is_delivered,
         o.delivered_at,
+        COALESCE(o.payment_status, 'unpaid') AS payment_status,
         o.delivery_charge_amount,
         c.name AS customer_name,
         c.phone,
@@ -491,7 +492,7 @@ router.get("/orders", async (req, res) => {
               AND (sp.pause_until IS NULL OR o.order_date <= sp.pause_until)
           )
         )
-      GROUP BY o.order_id, o.is_delivered, o.delivered_at, c.name, c.phone,
+      GROUP BY o.order_id, o.is_delivered, o.delivered_at, o.payment_status, c.name, c.phone,
                cv.address_type, a.apartment_id, a.name, a.address, b.block_id, b.block_name, cv.flat_number,
                cv.manual_address, o.quantity, o.order_date
       ORDER BY o.order_date DESC
@@ -544,12 +545,17 @@ router.patch("/orders/:id/delivered", async (req, res) => {
     const vendorId = getVendorId(req)
 
     const result = await pool.query(
-      "SELECT is_delivered FROM orders WHERE order_id = $1 AND vendor_id = $2",
+      "SELECT is_delivered, COALESCE(payment_status, 'unpaid') AS payment_status FROM orders WHERE order_id = $1 AND vendor_id = $2",
       [req.params.id, vendorId]
     )
     if (result.rowCount === 0) return res.status(404).send("Order not found")
 
-    const newStatus = !result.rows[0].is_delivered
+    const currentOrder = result.rows[0]
+    const newStatus = !currentOrder.is_delivered
+
+    if (currentOrder.is_delivered && !newStatus && currentOrder.payment_status === "paid") {
+      return res.status(400).json({ message: "Paid orders cannot be marked as undelivered" })
+    }
 
     await pool.query(`
       UPDATE orders
