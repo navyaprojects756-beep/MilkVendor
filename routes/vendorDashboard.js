@@ -200,21 +200,29 @@ async function getNoticeReasonByCode(reasonCode) {
 
 async function getNoticeAudience(vendorId, { from, to }) {
   const query = `
-    WITH order_totals AS (
+    WITH delivered_order_totals AS (
       SELECT
         o.customer_id,
-        SUM(COALESCE((
-          SELECT SUM(oi.quantity * oi.price_at_order)
-          FROM order_items oi
-          WHERE oi.order_id = o.order_id
-        ), o.quantity * COALESCE(vs.price_per_unit, 0)) + COALESCE(o.delivery_charge_amount, 0)) AS total_billed
+        o.payment_status,
+        COALESCE(SUM(oi.quantity * oi.price_at_order), 0)
+        + CASE
+            WHEN COALESCE(MAX(o.delivery_charge_amount), 0) > 0 THEN COALESCE(MAX(o.delivery_charge_amount), 0)
+            ELSE COALESCE(SUM(oi.delivery_charge_at_order), 0)
+          END AS order_total
       FROM orders o
-      LEFT JOIN vendor_settings vs ON vs.vendor_id = o.vendor_id
+      LEFT JOIN order_items oi ON oi.order_id = o.order_id
       WHERE o.vendor_id = $1
         AND o.is_delivered = true
         AND o.order_date >= $2::date
         AND o.order_date <= $3::date
-      GROUP BY o.customer_id
+      GROUP BY o.order_id, o.customer_id, o.payment_status
+    ),
+    order_totals AS (
+      SELECT
+        customer_id,
+        COALESCE(SUM(order_total), 0) AS total_billed
+      FROM delivered_order_totals
+      GROUP BY customer_id
     ),
     payment_totals AS (
       SELECT
