@@ -5,10 +5,39 @@ const express = require("express")
 
 const app = express()
 app.set("etag", false)
-app.use(cors({
-  origin: process.env.CORS_ORIGIN,
-  credentials: true
-}))
+
+const configuredCorsOrigins = [
+  ...String(process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+  (() => {
+    try {
+      return process.env.APP_BASE_URL ? new URL(process.env.APP_BASE_URL).origin : null
+    } catch {
+      return null
+    }
+  })(),
+].filter(Boolean)
+
+const localOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin) return callback(null, true)
+    if (!configuredCorsOrigins.length) return callback(null, true)
+    if (configuredCorsOrigins.includes(origin) || localOriginPattern.test(origin)) {
+      return callback(null, true)
+    }
+    return callback(new Error(`CORS origin not allowed: ${origin}`))
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}
+
+app.use(cors(corsOptions))
+app.options(/.*/, cors(corsOptions))
 require("./cron/orderCron")
 
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads'), {

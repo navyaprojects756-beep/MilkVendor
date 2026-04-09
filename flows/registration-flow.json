@@ -51,13 +51,15 @@
                 "type": "TextInput",
                 "name": "customer_name",
                 "label": "Your Name",
-                "required": true
+                "required": true,
+                "init-value": "${data.customer_name}"
               },
               {
                 "type": "RadioButtonsGroup",
                 "name": "address_type",
                 "label": "Address Type",
                 "required": true,
+                "init-value": "${data.address_type}",
                 "data-source": [
                   {
                     "id": "apartment",
@@ -132,7 +134,8 @@
                 "name": "apartment_id",
                 "label": "Apartment / Society",
                 "required": true,
-                "data-source": "${data.apartments}"
+                "data-source": "${data.apartments}",
+                "init-value": "${data.apartment_id}"
               },
               {
                 "type": "Footer",
@@ -204,13 +207,15 @@
                 "name": "block_id",
                 "label": "Block / Tower",
                 "required": true,
-                "data-source": "${data.blocks}"
+                "data-source": "${data.blocks}",
+                "init-value": "${data.block_id}"
               },
               {
                 "type": "TextInput",
                 "name": "flat_number",
                 "label": "Flat Number",
-                "required": true
+                "required": true,
+                "init-value": "${data.flat_number}"
               },
               {
                 "type": "Footer",
@@ -256,7 +261,8 @@
                 "type": "TextArea",
                 "name": "manual_address",
                 "label": "Delivery Address",
-                "required": true
+                "required": true,
+                "init-value": "${data.manual_address}"
               },
               {
                 "type": "Footer",
