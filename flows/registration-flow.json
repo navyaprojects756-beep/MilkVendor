@@ -46,20 +46,22 @@
           {
             "type": "Form",
             "name": "registration_intro",
+            "init-values": {
+              "customer_name": "${data.customer_name}",
+              "address_type": "${data.address_type}"
+            },
             "children": [
               {
                 "type": "TextInput",
                 "name": "customer_name",
                 "label": "Your Name",
-                "required": true,
-                "init-value": "${data.customer_name}"
+                "required": true
               },
               {
                 "type": "RadioButtonsGroup",
                 "name": "address_type",
                 "label": "Address Type",
                 "required": true,
-                "init-value": "${data.address_type}",
                 "data-source": [
                   {
                     "id": "apartment",
@@ -128,14 +130,16 @@
           {
             "type": "Form",
             "name": "apartment_details",
+            "init-values": {
+              "apartment_id": "${data.apartment_id}"
+            },
             "children": [
               {
                 "type": "Dropdown",
                 "name": "apartment_id",
                 "label": "Apartment / Society",
                 "required": true,
-                "data-source": "${data.apartments}",
-                "init-value": "${data.apartment_id}"
+                "data-source": "${data.apartments}"
               },
               {
                 "type": "Footer",
@@ -201,21 +205,23 @@
           {
             "type": "Form",
             "name": "flat_details",
+            "init-values": {
+              "block_id": "${data.block_id}",
+              "flat_number": "${data.flat_number}"
+            },
             "children": [
               {
                 "type": "Dropdown",
                 "name": "block_id",
                 "label": "Block / Tower",
                 "required": true,
-                "data-source": "${data.blocks}",
-                "init-value": "${data.block_id}"
+                "data-source": "${data.blocks}"
               },
               {
                 "type": "TextInput",
                 "name": "flat_number",
                 "label": "Flat Number",
-                "required": true,
-                "init-value": "${data.flat_number}"
+                "required": true
               },
               {
                 "type": "Footer",
@@ -256,13 +262,15 @@
           {
             "type": "Form",
             "name": "house_address",
+            "init-values": {
+              "manual_address": "${data.manual_address}"
+            },
             "children": [
               {
                 "type": "TextArea",
                 "name": "manual_address",
                 "label": "Delivery Address",
-                "required": true,
-                "init-value": "${data.manual_address}"
+                "required": true
               },
               {
                 "type": "Footer",
