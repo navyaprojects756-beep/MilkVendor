@@ -10,6 +10,7 @@
       "id": "PRODUCT_LIST",
       "title": "Set Quantities",
       "data": {
+        "max_qty_note": { "type": "string", "__example__": "Only enter packet count like 1, 2, 3. Max 10." },
         "product_1_name": { "type": "string", "__example__": "Milk (500ml)" },
         "product_1_price": { "type": "string", "__example__": "Rs.25.00 per unit" },
         "show_product_1": { "type": "boolean", "__example__": true },
@@ -45,66 +46,160 @@
         "children": [
           {
             "type": "TextBody",
-            "text": "Set your daily quantity for only for items you want in this."
+            "text": "Choose only the products you want daily. Enter packet count only."
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.max_qty_note}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_1",
             "label": "${data.product_1_name}",
-            "helper-text": "${data.product_1_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_1_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_1}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_1_price}",
+            "visible": "${data.show_product_1}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_2",
             "label": "${data.product_2_name}",
-            "helper-text": "${data.product_2_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_2_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_2}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_2_price}",
+            "visible": "${data.show_product_2}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_3",
             "label": "${data.product_3_name}",
-            "helper-text": "${data.product_3_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_3_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_3}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_3_price}",
+            "visible": "${data.show_product_3}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_4",
             "label": "${data.product_4_name}",
-            "helper-text": "${data.product_4_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_4_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_4}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_4_price}",
+            "visible": "${data.show_product_4}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_5",
             "label": "${data.product_5_name}",
-            "helper-text": "${data.product_5_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_5_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_5}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_5_price}",
+            "visible": "${data.show_product_5}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_6",
             "label": "${data.product_6_name}",
-            "helper-text": "${data.product_6_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_6_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
+            "visible": "${data.show_product_6}"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.product_6_price}",
             "visible": "${data.show_product_6}"
           },
           {
@@ -129,6 +224,7 @@
       "id": "PRODUCT_LIST_ADHOC",
       "title": "Quick Order",
       "data": {
+        "max_qty_note": { "type": "string", "__example__": "Only enter packet count like 1, 2, 3. Max 10." },
         "product_1_name": { "type": "string", "__example__": "Milk (500ml)" },
         "product_1_price": { "type": "string", "__example__": "Rs.25.00 per unit" },
         "show_product_1": { "type": "boolean", "__example__": true },
@@ -164,66 +260,160 @@
         "children": [
           {
             "type": "TextBody",
-            "text": "Enter quantity only for items you want in this quick order."
+            "text": "Choose only the products you want for tomorrow. Enter packet count only."
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.max_qty_note}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_1",
             "label": "${data.product_1_name}",
-            "helper-text": "${data.product_1_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_1_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_1}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_1_price}",
+            "visible": "${data.show_product_1}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_2",
             "label": "${data.product_2_name}",
-            "helper-text": "${data.product_2_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_2_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_2}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_2_price}",
+            "visible": "${data.show_product_2}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_3",
             "label": "${data.product_3_name}",
-            "helper-text": "${data.product_3_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_3_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_3}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_3_price}",
+            "visible": "${data.show_product_3}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_4",
             "label": "${data.product_4_name}",
-            "helper-text": "${data.product_4_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_4_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_4}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_4_price}",
+            "visible": "${data.show_product_4}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_5",
             "label": "${data.product_5_name}",
-            "helper-text": "${data.product_5_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_5_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
             "visible": "${data.show_product_5}"
           },
           {
-            "type": "TextInput",
+            "type": "TextBody",
+            "text": "${data.product_5_price}",
+            "visible": "${data.show_product_5}"
+          },
+          {
+            "type": "Dropdown",
             "name": "qty_6",
             "label": "${data.product_6_name}",
-            "helper-text": "${data.product_6_price}",
-            "input-type": "number",
             "required": false,
-            "init-value": "${data.qty_6_init}",
+            "data-source": [
+              { "id": "0", "title": "0 - Not needed" },
+              { "id": "1", "title": "1 packet" },
+              { "id": "2", "title": "2 packets" },
+              { "id": "3", "title": "3 packets" },
+              { "id": "4", "title": "4 packets" },
+              { "id": "5", "title": "5 packets" },
+              { "id": "6", "title": "6 packets" },
+              { "id": "7", "title": "7 packets" },
+              { "id": "8", "title": "8 packets" },
+              { "id": "9", "title": "9 packets" },
+              { "id": "10", "title": "10 packets" }
+            ],
+            "visible": "${data.show_product_6}"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.product_6_price}",
             "visible": "${data.show_product_6}"
           },
           {

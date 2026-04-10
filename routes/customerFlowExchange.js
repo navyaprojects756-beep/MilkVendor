@@ -176,12 +176,23 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
     ? `(order_type='adhoc' OR order_type='both')`
     : `(order_type='subscription' OR order_type='both')`
 
-  const { rows: products } = await pool.query(
-    `SELECT product_id, name, unit, price, delivery_charge
-     FROM products WHERE vendor_id=$1 AND is_active=true AND ${orderTypeFilter}
-     ORDER BY sort_order, product_id LIMIT $2`,
-    [vendorId, MAX_SLOTS]
-  )
+  const [{ rows: products }, { rows: settingsRows }] = await Promise.all([
+    pool.query(
+      `SELECT product_id, name, unit, price, delivery_charge
+       FROM products WHERE vendor_id=$1 AND is_active=true AND ${orderTypeFilter}
+       ORDER BY sort_order, product_id LIMIT $2`,
+      [vendorId, MAX_SLOTS]
+    ),
+    pool.query(
+      `SELECT max_quantity_per_order
+       FROM vendor_settings
+       WHERE vendor_id=$1
+       LIMIT 1`,
+      [vendorId]
+    ),
+  ])
+
+  const maxQtyPerOrder = parseInt(settingsRows[0]?.max_quantity_per_order || 10, 10) || 10
 
   /* Current subscription quantities (for pre-population) */
   let subMap = {}
@@ -221,7 +232,9 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
     adhocItems.forEach(i => { adhocMap[i.product_id] = i.quantity })
   }
 
-  const data = {}
+  const data = {
+    max_qty_note: `Only enter packet count like 1, 2, 3. Max ${maxQtyPerOrder}.`,
+  }
 
   for (let i = 1; i <= MAX_SLOTS; i++) {
     const p = products[i - 1]
@@ -236,16 +249,16 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
       const priceLabel   = `₹${price} per unit`
 
       data[`product_${i}_name`]  = nameWithUnit.length <= 30 ? nameWithUnit : nameWithUnit.slice(0, 30)
-      data[`product_${i}_price`] = priceLabel
+      data[`product_${i}_price`] = `Price: Rs.${price} each`
       data[`product_${i}_label`] = nameWithUnit.length <= 20 ? nameWithUnit : nameWithUnit.slice(0, 20) // legacy
       data[`show_product_${i}`]  = true
-      data[`qty_${i}_init`]      = String(currentQty > 0 ? currentQty : 0)
+      data[`qty_${i}_init`]      = currentQty > 0 ? String(currentQty) : ""
     } else {
       data[`product_${i}_name`]  = ""
       data[`product_${i}_price`] = ""
       data[`product_${i}_label`] = ""
       data[`show_product_${i}`]  = false
-      data[`qty_${i}_init`]      = "0"
+      data[`qty_${i}_init`]      = ""
     }
   }
 
@@ -306,6 +319,15 @@ router.post("/", async (req, res) => {
           ? `(order_type='adhoc' OR order_type='both')`
           : `(order_type='subscription' OR order_type='both')`
 
+        const { rows: vendorSettingsRows } = await pool.query(
+          `SELECT max_quantity_per_order
+           FROM vendor_settings
+           WHERE vendor_id=$1
+           LIMIT 1`,
+          [vendorId]
+        )
+        const maxQtyPerOrder = parseInt(vendorSettingsRows[0]?.max_quantity_per_order || 10, 10) || 10
+
         const { rows: products } = await pool.query(
           `SELECT product_id, name, unit, price, delivery_charge
            FROM products WHERE vendor_id=$1 AND is_active=true AND ${orderTypeFilter}
@@ -322,7 +344,7 @@ router.post("/", async (req, res) => {
             const raw = readQty(flowData, i + 1)
             if (!raw || String(raw).trim() === "") continue
             const qty = parseInt(raw)
-            if (isNaN(qty) || qty < 1) continue
+            if (isNaN(qty) || qty < 1 || qty > maxQtyPerOrder) continue
             cartItems.push({
               product_id:   p.product_id,
               product_name: p.name,
@@ -361,7 +383,7 @@ router.post("/", async (req, res) => {
             const raw = readQty(flowData, i + 1)
             if (raw === undefined || raw === null || String(raw).trim() === "") continue
             const qty = parseInt(raw)
-            if (isNaN(qty) || qty < 0) continue
+            if (isNaN(qty) || qty < 0 || qty > maxQtyPerOrder) continue
 
             console.log(`  Sub: ${p.name} qty=${qty}`)
             anyChanged = true
