@@ -1606,7 +1606,7 @@ async function handleCustomerBot(msg, pid) {
 
     // Unrecognised input in menu state ? save to inbox + auto-reply
     await saveInboundMessage(vId, cId, phone, "text", input, null)
-    const vendorPhone = settings.vendor_phone || profile.whatsapp_number || ""
+    const vendorPhone = profile.whatsapp_number || ""
     await sendText(pid, phone,
       vendorPhone
         ? `We received your message.\n\nFor immediate help, please call:\n*${vendorPhone}*`
@@ -2442,7 +2442,7 @@ async function handleCustomerBot(msg, pid) {
   }
 
   // Auto-reply with vendor contact
-  const vendorPhone = settings.vendor_phone || profile.whatsapp_number || ""
+  const vendorPhone = profile.whatsapp_number || ""
   const autoReply =
     msg.type === "audio"
       ? (vendorPhone
