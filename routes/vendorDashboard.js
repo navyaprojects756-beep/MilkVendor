@@ -2469,23 +2469,27 @@ router.post("/whatsapp-flow-data", async (req, res) => {
 
         if (addressType === "apartment") {
           const selectedApartmentId = flowData?.apartment_id || (prefill.profile?.apartment_id ? String(prefill.profile.apartment_id) : "")
+          const apartmentData = {
+            customer_name: customerName,
+            apartments: prefill.apartments.map((a) => ({ id: String(a.apartment_id), title: a.name })),
+          }
+          if (selectedApartmentId) apartmentData.apartment_id = selectedApartmentId
 
           responsePayload = {
             screen: "APARTMENT_ADDRESS",
-            data: {
-              customer_name: customerName,
-              apartment_id: selectedApartmentId,
-              apartments: prefill.apartments.map((a) => ({ id: String(a.apartment_id), title: a.name })),
-            },
+            data: apartmentData,
           }
         } else {
           // House — go straight to manual address screen
+          const houseData = {
+            customer_name: customerName,
+          }
+          if (flowData?.manual_address || prefill.profile?.manual_address) {
+            houseData.manual_address = flowData?.manual_address || prefill.profile?.manual_address || ""
+          }
           responsePayload = {
             screen: "HOUSE_ADDRESS",
-            data: {
-              customer_name: customerName,
-              manual_address: flowData?.manual_address || prefill.profile?.manual_address || "",
-            },
+            data: houseData,
           }
         }
         console.log("[REG FLOW RESP WELCOME]", JSON.stringify(responsePayload, null, 2))
@@ -2504,15 +2508,16 @@ router.post("/whatsapp-flow-data", async (req, res) => {
         const flatNumber = prefill.profile?.apartment_id && String(prefill.profile.apartment_id) === String(aptId)
           ? (prefill.profile?.flat_number || "")
           : ""
+        const blockData = {
+          customer_name: flowData?.customer_name || "",
+          apartment_id: aptId,
+          blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
+        }
+        if (blockId) blockData.block_id = blockId
+        if (flatNumber) blockData.flat_number = flatNumber
         responsePayload = {
           screen: "APARTMENT_BLOCK",
-          data: {
-            customer_name: flowData?.customer_name || "",
-            apartment_id:  aptId,
-            block_id:      blockId,
-            flat_number:   flatNumber,
-            blocks: blockRows.map((b) => ({ id: String(b.block_id), title: b.block_name })),
-          },
+          data: blockData,
         }
         console.log("[REG FLOW RESP APT]", JSON.stringify(responsePayload, null, 2))
       }
