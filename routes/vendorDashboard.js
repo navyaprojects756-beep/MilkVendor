@@ -86,6 +86,14 @@ function validateSchedule(profile = {}, settings = {}) {
   return null
 }
 
+function normalizeText(value) {
+  return String(value || "").trim()
+}
+
+function normalizePhone(value) {
+  return String(value || "").replace(/[^\d+]/g, "").trim()
+}
+
 async function sendVendorWhatsAppText(phoneNumberId, phone, text) {
   const response = await axios.post(
     `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
@@ -104,6 +112,48 @@ async function sendVendorWhatsAppText(phoneNumberId, phone, text) {
   )
   return response.data
 }
+
+router.post("/register-interest", async (req, res) => {
+  try {
+    const fullName = normalizeText(req.body?.full_name)
+    const shopName = normalizeText(req.body?.shop_name)
+    const shopAddress = normalizeText(req.body?.shop_address)
+    const contactNumber = normalizePhone(req.body?.contact_number)
+    const whatsappApiNumber = normalizePhone(req.body?.whatsapp_api_number)
+    const acceptedTerms = req.body?.accepted_terms === true
+
+    if (!fullName || !shopName || !shopAddress || !contactNumber || !whatsappApiNumber) {
+      return res.status(400).json({ message: "Please fill all required vendor details." })
+    }
+    if (!acceptedTerms) {
+      return res.status(400).json({ message: "Please approve the terms and conditions." })
+    }
+
+    const inserted = await pool.query(`
+      INSERT INTO vendors (
+        contact_name,
+        vendor_name,
+        address,
+        phone,
+        phone_number_id,
+        is_active,
+        whatsapp_api_number
+      ) VALUES ($1, $2, $3, $4, '', false, $5)
+      RETURNING vendor_id, contact_name, vendor_name, address, phone, phone_number_id, is_active, whatsapp_api_number
+    `, [fullName, shopName, shopAddress, contactNumber, whatsappApiNumber])
+
+    res.status(201).json({
+      message: "Thank you. Our vendor team will contact you soon.",
+      vendor: inserted.rows[0],
+    })
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(409).json({ message: "This WhatsApp API number is already registered." })
+    }
+    console.error("Vendor public registration error:", err.message)
+    res.status(500).json({ message: "Could not save vendor details right now." })
+  }
+})
 
 function getTemplateLanguageCandidates(languageCode) {
   const normalized = String(languageCode || "").trim()
