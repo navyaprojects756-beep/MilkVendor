@@ -2446,17 +2446,18 @@ router.post("/whatsapp-flow-data", async (req, res) => {
         const prefill = await getRegistrationPrefill(payload.flow_token)
         const currentName = prefill.customer?.name || ""
         const addressType = prefill.profile?.address_type || ""
+        const initData = {}
+
+        if (currentName) initData.customer_name = currentName
+        if (addressType) initData.address_type = addressType
+        if (prefill.profile?.apartment_id) initData.apartment_id = String(prefill.profile.apartment_id)
+        if (prefill.profile?.block_id) initData.block_id = String(prefill.profile.block_id)
+        if (prefill.profile?.flat_number) initData.flat_number = prefill.profile.flat_number
+        if (prefill.profile?.manual_address) initData.manual_address = prefill.profile.manual_address
 
         responsePayload = {
           screen: "WELCOME",
-          data: {
-            customer_name: currentName,
-            address_type: addressType,
-            apartment_id: prefill.profile?.apartment_id ? String(prefill.profile.apartment_id) : "",
-            block_id: prefill.profile?.block_id ? String(prefill.profile.block_id) : "",
-            flat_number: prefill.profile?.flat_number || "",
-            manual_address: prefill.profile?.manual_address || "",
-          },
+          data: initData,
         }
         console.log("[REG FLOW RESP INIT]", JSON.stringify(responsePayload, null, 2))
 
