@@ -1386,6 +1386,47 @@ async function handleCustomerBot(msg, pid) {
 
   const inputLower = (input || "").toLowerCase()
 
+  const resetToMainMenuWithSupportReply = async () => {
+    let msgContent = null
+    let msgType = "text"
+    let mediaId = null
+
+    if (msg.type === "text") {
+      msgContent = input || msg.text?.body?.trim() || null
+    } else if (msg.type === "image") {
+      msgType = "image"
+      mediaId = msg.image?.id
+      msgContent = msg.image?.caption || null
+    } else if (msg.type === "document") {
+      msgType = "document"
+      mediaId = msg.document?.id
+      msgContent = msg.document?.caption || null
+    } else if (msg.type === "audio") {
+      msgType = "audio"
+      mediaId = msg.audio?.id
+    } else if (msg.type === "video") {
+      msgType = "video"
+      mediaId = msg.video?.id
+      msgContent = msg.video?.caption || null
+    }
+
+    if (msgContent || mediaId) {
+      await saveInboundMessage(vId, cId, phone, msgType, msgContent, mediaId)
+    }
+
+    const vendorPhone = profile.whatsapp_number || ""
+    await sendText(pid, phone,
+      vendorPhone
+        ? `We received your message.\n\nFor immediate help, please call:\n*${vendorPhone}*`
+        : `We received your message and will get back to you if needed.`
+    )
+
+    const sub = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
+    await setState(phone, "menu", vId)
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+  }
+
   /* -- Global: greetings and menu reset -- */
 
   const isReset   = ["hi", "hello", "start"].includes(inputLower)
@@ -1605,14 +1646,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     // Unrecognised input in menu state ? save to inbox + auto-reply
-    await saveInboundMessage(vId, cId, phone, "text", input, null)
-    const vendorPhone = profile.whatsapp_number || ""
-    await sendText(pid, phone,
-      vendorPhone
-        ? `We received your message.\n\nFor immediate help, please call:\n*${vendorPhone}*`
-        : `We received your message and will get back to you if needed.`
-    )
-    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+    await resetToMainMenuWithSupportReply()
     return
   }
 
@@ -1634,8 +1668,7 @@ async function handleCustomerBot(msg, pid) {
     const qty   = parseInt(parts[parts.length - 1])
 
     if (isNaN(qty) || qty < 1) {
-      await sendText(pid, phone, "Please choose a quantity from the list.")
-      await sendQtyMenu(pid, phone, prefix, maxQty, price)
+      await resetToMainMenuWithSupportReply()
       return
     }
 
@@ -1651,7 +1684,7 @@ async function handleCustomerBot(msg, pid) {
     const maxQty = settings.max_quantity_per_order || 0
 
     if (isNaN(qty) || !/^\d+$/.test(input.trim())) {
-      await sendText(pid, phone, "Please enter a valid number (e.g. *6*, *8*, *10*).")
+      await resetToMainMenuWithSupportReply()
       return
     }
     if (qty < 1) {
@@ -1699,8 +1732,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Invalid tap — redisplay
-    await sendPauseMenu(pid, phone)
+    await resetToMainMenuWithSupportReply()
     return
   }
 
@@ -1721,7 +1753,7 @@ async function handleCustomerBot(msg, pid) {
       await sendText(pid, phone, "*Enter Your Delivery Address*\n\nType your full house address\n(e.g. 12, Rose Street, Sector 5):")
       await setState(phone, "manual", vId, temp)
     } else {
-      await sendText(pid, phone, "Please select from the options provided.")
+      await resetToMainMenuWithSupportReply()
     }
     return
   }
@@ -1730,7 +1762,7 @@ async function handleCustomerBot(msg, pid) {
 
   if (state.state === "apt") {
     if (!input.startsWith("apt_")) {
-      await sendApartmentMenu(pid, phone, vId)
+      await resetToMainMenuWithSupportReply()
       return
     }
     const aptId       = input.split("_")[1]
@@ -1757,8 +1789,7 @@ async function handleCustomerBot(msg, pid) {
 
   if (state.state === "block") {
     if (!input.startsWith("block_")) {
-      const aptId = state.temp_data?.aptId
-      if (aptId) await sendBlockMenu(pid, phone, aptId)
+      await resetToMainMenuWithSupportReply()
       return
     }
     const blockId     = input.split("_")[1]
@@ -1818,10 +1849,7 @@ async function handleCustomerBot(msg, pid) {
     }
     const entry = periodMap[input]
     if (!entry) {
-      const sub   = await getSubscription(cId, vId)
-      const pause = await getActivePause(cId, vId)
-      await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      await resetToMainMenuWithSupportReply()
       return
     }
 
@@ -1951,10 +1979,7 @@ async function handleCustomerBot(msg, pid) {
 
   if (state.state === "pay_confirm") {
     if (input !== "confirm_pay") {
-      const sub   = await getSubscription(cId, vId)
-      const pause = await getActivePause(cId, vId)
-      await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      await resetToMainMenuWithSupportReply()
       return
     }
 
@@ -2092,15 +2117,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Any other input — re-show the confirmation
-    const tomorrow = getISTDateStr(1)
-    await sendButtons(pid, phone,
-      buildCartOrderSummary(cart, delCharge, tomorrow, profile),
-      [
-        { id: "flow_confirm_order", title: "Confirm Order" },
-        { id: "flow_cancel_order",  title: "Cancel"        },
-      ]
-    )
+    await resetToMainMenuWithSupportReply()
     return
   }
 
@@ -2147,10 +2164,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Re-open the flow on any other input
-    await sendProductListFlow(pid, phone, cId, vId,
-      `*Your Daily Products*\n\nSet your daily quantity for each product below.`
-    )
+    await resetToMainMenuWithSupportReply()
     return
   }
 
@@ -2159,7 +2173,7 @@ async function handleCustomerBot(msg, pid) {
   if (state.state === "product_qty") {
     const qty = parseInt((input || "").trim())
     if (isNaN(qty) || qty < 0) {
-      await sendText(pid, phone, "Please enter a valid number (1 or more to subscribe, 0 to stop delivery).")
+      await resetToMainMenuWithSupportReply()
       return
     }
 
@@ -2267,8 +2281,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Re-show product list
-    await sendAdhocProductList(pid, phone, vId, cart)
+    await resetToMainMenuWithSupportReply()
     return
   }
 
@@ -2277,7 +2290,7 @@ async function handleCustomerBot(msg, pid) {
   if (state.state === "adhoc_qty") {
     const qty = parseInt((input || "").trim())
     if (isNaN(qty) || qty < 1) {
-      await sendText(pid, phone, "Please enter a number of 1 or more (e.g. 1, 2, 3).")
+      await resetToMainMenuWithSupportReply()
       return
     }
     if (qty > 50) {
@@ -2338,15 +2351,7 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Any other input — re-show cart
-    const cartLines = cart.map(item => `• ${item.product_name} × ${item.qty}`).join("\n")
-    await sendButtons(pid, phone,
-      `*Your Cart:*\n\n${cartLines}\n\nWhat would you like to do?`,
-      [
-        { id: "adhoc_place_order", title: "Place Order" },
-        { id: "adhoc_add_more",    title: "Add More"    },
-      ]
-    )
+    await resetToMainMenuWithSupportReply()
     return
   }
 
@@ -2362,10 +2367,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     if (input !== "adhoc_confirm") {
-      const sub   = await getSubscription(cId, vId)
-      const pause = await getActivePause(cId, vId)
-      await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      await resetToMainMenuWithSupportReply()
       return
     }
 
