@@ -1157,8 +1157,10 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
   }
 
   const menuCtx = await getMenuContextByPhone(phone, vendorId)
-  const adhocMenuTitle = menuCtx.hasUpcomingAdhoc ? "Change Tomorrow Orders" : "Order Tomorrow"
+  const adhocMenuTitle = menuCtx.hasUpcomingAdhoc ? "Edit Tomorrow Orders" : "Order Tomorrow"
   const adhocMenuDesc = menuCtx.hasUpcomingAdhoc ? "Update your extra products for tomorrow" : "Order extra products for tomorrow"
+  const dailyMenuTitle = menuCtx.hasProductSubs ? "Edit Daily Orders" : "Daily Subscription"
+  const dailyMenuDesc  = menuCtx.hasProductSubs ? "Update your daily delivery products" : "Choose your daily delivery products"
   let header, rows
 
   if (!sub) {
@@ -1169,7 +1171,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     }
     if (withProducts) {
       rows.push(
-        { id: "manage_products", title: "Daily Subscription", description: "Choose your daily delivery products" },
+        { id: "manage_products", title: dailyMenuTitle, description: dailyMenuDesc },
         { id: "adhoc_order",     title: adhocMenuTitle,       description: adhocMenuDesc },
         { id: "profile",         title: "Profile",         description: "View or update your details" }
       )
@@ -1206,7 +1208,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "Get Bill",          description: "Download your bill"          },
     ]
     if (withProducts) {
-      rows.splice(1, 0, { id: "manage_products", title: "Change Daily Products", description: "Update your daily delivery products" })
+      rows.splice(1, 0, { id: "manage_products", title: dailyMenuTitle, description: dailyMenuDesc })
       rows.splice(2, 0, { id: "adhoc_order",     title: adhocMenuTitle,          description: adhocMenuDesc })
       // Only show Pause if customer has active daily product subscriptions
       if (!menuCtx.hasProductSubs) {
@@ -1226,7 +1228,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     )
     if (withProducts) {
       rows.unshift({ id: "adhoc_order",     title: adhocMenuTitle,  description: adhocMenuDesc })
-      rows.unshift({ id: "manage_products", title: "Daily Subscription", description: "Choose your daily delivery products" })
+      rows.unshift({ id: "manage_products", title: dailyMenuTitle, description: dailyMenuDesc })
     }
   }
 
@@ -1739,8 +1741,12 @@ async function handleCustomerBot(msg, pid) {
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
         return
       }
+      const menuCtxSub = await getMenuContextByPhone(phone, vId)
+      const subCtaText = menuCtxSub.hasProductSubs ? "Edit Daily Orders" : "Daily Products"
       await sendProductListFlow(pid, phone, cId, vId,
-        `*Daily Subscription Products*\n\nSet your daily quantity for each product below.`
+        `*Daily Subscription Products*\n\nSet your daily quantity for each product below.`,
+        "sub",
+        subCtaText
       )
       await setState(phone, "manage_products", vId)
       return
@@ -1759,10 +1765,13 @@ async function handleCustomerBot(msg, pid) {
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
         return
       }
+      const menuCtxAdhoc = await getMenuContextByPhone(phone, vId)
+      const adhocCtaText = menuCtxAdhoc.hasUpcomingAdhoc ? "Edit Tomorrow Orders" : "Order Tomorrow"
       const tomorrow = istTomorrowStr()
       await sendProductListFlow(pid, phone, cId, vId,
         `*Order Tomorrow Products*\n\nEnter quantity for each product you want delivered on *${displayDate(tomorrow)}*.`,
-        "adhoc"
+        "adhoc",
+        adhocCtaText
       )
       await setState(phone, "adhoc_product", vId, { cart: [] })
       return
