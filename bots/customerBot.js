@@ -958,7 +958,7 @@ async function restorePausedOrders(cId, vId) {
 
 async function buildOrdersPlanText(cId, vId, withProducts, options = {}) {
   const {
-    title = `\u{1F4CB} *Your Orders & Plan*`,
+    title = `\u{1F4CB} *Your daily subscription*`,
     restored = null,
     pause = null,
   } = options
@@ -967,7 +967,8 @@ async function buildOrdersPlanText(cId, vId, withProducts, options = {}) {
   const sub = await getSubscription(cId, vId)
   const lines = []
 
-  if (title) lines.push(title, "")
+  if (addr) lines.push(`\u{1F4CD} Your delivery address: ${formatAddress(addr)}`)
+  if (title) lines.push(...(lines.length ? ["", title, ""] : [title, ""]))
 
   if (withProducts) {
     const prodSubs = await getCustomerProductSubs(cId, vId)
@@ -984,21 +985,6 @@ async function buildOrdersPlanText(cId, vId, withProducts, options = {}) {
     lines.push(`Quantity: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}* per day`)
   } else {
     lines.push(`No active daily subscription.`)
-  }
-
-  if (addr) lines.push(``, `\u{1F4CD} Address: ${formatAddress(addr)}`)
-
-  if (sub && pause) {
-    lines.push(
-      ``,
-      pause.pause_until
-        ? `\u{23F8} Status: Paused from ${displayDate(pause.pause_from)} to ${displayDate(pause.pause_until)}`
-        : `\u{23F8} Status: Paused until you resume`
-    )
-  } else if (sub) {
-    lines.push(``, `\u{2705} Status: Active`)
-  } else {
-    lines.push(``, `No daily subscription active`)
   }
 
   const sections = await getUpcomingOrderSections(cId, vId)
