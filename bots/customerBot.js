@@ -1023,6 +1023,7 @@ async function buildOrdersPlanText(cId, vId, withProducts, options = {}) {
     title = `\u{1F4CB} *Your daily subscription*`,
     restored = null,
     pause = null,
+    pauseText = null,
   } = options
 
   const addr = await getAddress(cId, vId)
@@ -1048,6 +1049,8 @@ async function buildOrdersPlanText(cId, vId, withProducts, options = {}) {
   } else {
     lines.push(`No active daily subscription.`)
   }
+
+  if (pauseText) lines.push("", pauseText)
 
   const sections = await getUpcomingOrderSections(cId, vId)
   if (!sections.length && restored?.nextAdhocDate && restored?.adhocItems?.length) {
@@ -1161,10 +1164,12 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       : `*Daily products paused* from *${displayDate(pause.pause_from)}* until you resume.\nYour daily subscription deliveries are paused until you resume.\n_(Extra/adhoc orders are not affected)_`
     const custRow = await pool.query("SELECT customer_id FROM customers WHERE phone=$1 LIMIT 1", [phone])
     const pauseCId = custRow.rows[0]?.customer_id
-    const pauseSummary = pauseCId ? await buildResumeSummary(pauseCId, vendorId, withProducts).catch(() => null) : null
+    const fullSummary = pauseCId
+      ? await buildOrdersPlanText(pauseCId, vendorId, withProducts, { pauseText: pauseDetails }).catch(() => null)
+      : null
     const titleLine = promptText || `*${name}*`
-    header = pauseSummary
-      ? `${titleLine}\n\n${pauseDetails}\n\n${pauseSummary}`
+    header = fullSummary
+      ? `${titleLine}\n\n${fullSummary}`
       : `${titleLine}\n\n${pauseDetails}`
     rows = [
       { id: "resume_pause", title: "Resume Daily Orders", description: "End pause & restart daily delivery" },
@@ -1666,8 +1671,11 @@ async function handleCustomerBot(msg, pid) {
       hasAnyActivity = sub?.status === "active" || menuCtxWelcome.hasOrders || menuCtxWelcome.hasUpcomingAdhoc
 
       if (hasAnyActivity) {
-        const summary = await buildResumeSummary(cId, vId, withProducts)
-        await sendText(pid, phone, `*Welcome back!*\n\n${summary || formatAddress(addr)}`)
+        if (!pause) {
+          const summary = await buildResumeSummary(cId, vId, withProducts)
+          await sendText(pid, phone, `*Welcome back!*\n\n${summary || formatAddress(addr)}`)
+        }
+        // When pause active, sendMainMenu will show everything in one message
       } else {
         await sendText(pid, phone, `*Welcome to ${name}!*\n\nFresh milk & dairy products delivered to your doorstep. `)
       }
@@ -2328,19 +2336,20 @@ async function handleCustomerBot(msg, pid) {
       await replaceUpcomingAdhocOrder(cId, vId, tomorrow, cart)
 
       const timingLine = formatDeliveryWindow(profile)
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
 
-      const summary = await buildResumeSummary(cId, vId, withProducts)
       if (cart.length === 0) {
         await sendText(pid, phone, `*Orders Cancelled!*\n\nYour adhoc order for ${displayDate(tomorrow)} has been removed.`)
-      } else {
+      } else if (!pause) {
+        const summary = await buildResumeSummary(cId, vId, withProducts)
         await sendText(pid, phone,
           `*Order Placed!*\n\n${summary}\n\n` +
           `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
         )
       }
+      // When pause active, sendMainMenu will show everything in one message
 
-      const sub   = await getSubscription(cId, vId)
-      const pause = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts, false, cart.length > 0 ? "*Order Placed!*" : null)
       return
@@ -2658,15 +2667,18 @@ async function handleCustomerBot(msg, pid) {
       : []
     const orderDelivery = parseFloat(orderAfterRows[0]?.delivery_charge_amount || 0)
     const timingLine = formatDeliveryWindow(profile)
-
-    const summary = await buildResumeSummary(cId, vId, withProducts)
-    const successText = summary
-      ? `*Order Placed!*\n\n${summary}\n\nYour order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
-      : buildPlacedOrderFallback(cart, orderDelivery, tomorrow, addr, profile)
-    await sendText(pid, phone, successText)
-
     const sub   = await getSubscription(cId, vId)
     const pause = await getActivePause(cId, vId)
+
+    if (!pause) {
+      const summary = await buildResumeSummary(cId, vId, withProducts)
+      const successText = summary
+        ? `*Order Placed!*\n\n${summary}\n\nYour order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
+        : buildPlacedOrderFallback(cart, orderDelivery, tomorrow, addr, profile)
+      await sendText(pid, phone, successText)
+    }
+    // When pause active, sendMainMenu will show everything in one message
+
     await setState(phone, "menu", vId)
     await sendMainMenu(pid, phone, sub, profile, pause, withProducts, false, "*Order Placed!*")
     return
