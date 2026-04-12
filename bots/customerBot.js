@@ -896,8 +896,14 @@ async function removePausedOrders(cId, vId, from, until = null) {
       [cId, vId, from, until]
     )
 
-    const orderIds = []
     for (const order of ordersRes.rows) {
+      // Only archive orders that have subscription items — adhoc orders are not paused
+      const subCheck = await pool.query(
+        `SELECT 1 FROM order_items WHERE order_id=$1 AND order_type='subscription' LIMIT 1`,
+        [order.order_id]
+      )
+      if (subCheck.rows.length === 0) continue
+
       const archiveRes = await pool.query(
         `INSERT INTO paused_orders_archive
            (customer_id, vendor_id, order_date, quantity, delivery_charge_amount, payment_status)
@@ -915,22 +921,33 @@ async function removePausedOrders(cId, vId, from, until = null) {
       const archiveId = archiveRes.rows[0]?.archive_id
       if (!archiveId) continue
 
+      // Archive only subscription items
       await pool.query(`DELETE FROM paused_order_items_archive WHERE archive_id=$1`, [archiveId])
       await pool.query(
         `INSERT INTO paused_order_items_archive
            (archive_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
          SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
          FROM order_items
-         WHERE order_id=$2`,
+         WHERE order_id=$2 AND order_type='subscription'`,
         [archiveId, order.order_id]
       )
 
-      orderIds.push(order.order_id)
-    }
+      // Remove only subscription items from the live order
+      await pool.query(
+        `DELETE FROM order_items WHERE order_id=$1 AND order_type='subscription'`,
+        [order.order_id]
+      )
 
-    if (!orderIds.length) return
-    await pool.query(`DELETE FROM order_items WHERE order_id = ANY($1::int[])`, [orderIds])
-    await pool.query(`DELETE FROM orders WHERE order_id = ANY($1::int[])`, [orderIds])
+      // Delete the order row only if no remaining items (adhoc might keep it alive)
+      await pool.query(
+        `DELETE FROM orders WHERE order_id=$1
+         AND NOT EXISTS (SELECT 1 FROM order_items WHERE order_id=$1)`,
+        [order.order_id]
+      )
+
+      // Refresh totals if order still has items
+      await refreshOrderTotals(order.order_id).catch(() => {})
+    }
   } catch (e) {
     console.error("removePausedOrders archive fallback:", e.message)
   }
@@ -1948,15 +1965,10 @@ async function handleCustomerBot(msg, pid) {
       const until = dateToStr(addDays(tomorrow, days - 1))
       await savePause(cId, vId, from, until)
       await removePausedOrders(cId, vId, from, until)
-      const summary = await buildResumeSummary(cId, vId, withProducts)
-      await sendText(pid, phone,
-        `*Daily Delivery Paused*\n\nYour daily subscription products are paused from *${displayDate(from)}* to *${displayDate(until)}*.\n\n_Extra/adhoc orders are not affected — you can still place quick orders during this period._` +
-        (summary ? `\n\n${summary}` : "")
-      )
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, s, profile, p, withProducts)
+      await sendMainMenu(pid, phone, s, profile, p, withProducts, false, "*Daily Delivery Paused*")
       return
     }
 
@@ -1964,15 +1976,10 @@ async function handleCustomerBot(msg, pid) {
       const from = dateToStr(tomorrow)
       await savePause(cId, vId, from, null)
       await removePausedOrders(cId, vId, from, null)
-      const summary = await buildResumeSummary(cId, vId, withProducts)
-      await sendText(pid, phone,
-        `*Daily Delivery Paused*\n\nYour daily subscription products are paused from *${displayDate(from)}* until you resume.\n\n_Extra/adhoc orders are not affected — you can still place quick orders during this period._` +
-        (summary ? `\n\n${summary}` : "")
-      )
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, s, profile, p, withProducts)
+      await sendMainMenu(pid, phone, s, profile, p, withProducts, false, "*Daily Delivery Paused*")
       return
     }
 
