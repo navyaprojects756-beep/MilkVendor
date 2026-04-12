@@ -1362,7 +1362,7 @@ async function handleCustomerBot(msg, pid) {
   console.log("Vendor:", vendor.vendor_id, vendor.vendor_name || "")
 
   const customer = await getCustomer(phone)
-  const state    = await getState(phone)
+  let state      = await getState(phone)
   const settings = await getSettings(vendor.vendor_id)
   const profile  = await getProfile(vendor.vendor_id)
 
@@ -1604,6 +1604,18 @@ async function handleCustomerBot(msg, pid) {
     await setState(phone, "menu", vId)
     await sendMainMenu(pid, phone, sub, profile, pause, withProducts, true)
     return
+  }
+
+  /* -- Global: menu button tapped from any state -- */
+  // WhatsApp lets customers tap buttons from old messages, so honour menu actions
+  // regardless of the current conversation state.
+  const MENU_ACTIONS = ["manage_products", "adhoc_order", "subscribe", "view", "change",
+                        "profile", "get_invoice", "pause", "resume_pause", "resume"]
+  const isButtonOrListReply = msg.type === "interactive" &&
+    (msg.interactive?.type === "button_reply" || msg.interactive?.type === "list_reply")
+  if (isButtonOrListReply && MENU_ACTIONS.includes(input) && state?.state !== "menu") {
+    await setState(phone, "menu", vId)
+    state = { ...state, state: "menu" }
   }
 
   /* -- Menu state -- */
