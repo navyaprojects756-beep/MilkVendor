@@ -245,16 +245,33 @@ function formatDeliveryWindow(profile = {}) {
   return `\nDelivery Time: ${formatTime12(profile.delivery_start)} to ${formatTime12(profile.delivery_end)}`
 }
 
-function isOrderWindowOpen(settings) {
+function formatOrderWindowText(start, end) {
+  if (!start || !end) return ""
+  const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m }
+  const startMins = toMins(start)
+  const endMins = toMins(end)
+  if (startMins === endMins) return `${formatTime12(start)} to ${formatTime12(end)}`
+  if (startMins < endMins) return `${formatTime12(start)} to ${formatTime12(end)}`
+  return `${formatTime12(start)} to next day ${formatTime12(end)}`
+}
+
+function isOrderWindowOpen(settings, profile = {}) {
   if (!settings.order_window_enabled) return true
   const now = getISTNow()
-  const day = now.getDay()
-  const activeDays = (settings.active_days || [0, 1, 2, 3, 4, 5, 6]).map(Number)
-  if (!activeDays.includes(day)) return false
-  if (!settings.order_accept_start || !settings.order_accept_end) return true
+  const activeDays = (profile.active_days || settings.active_days || [0, 1, 2, 3, 4, 5, 6]).map(Number)
+  const acceptStartValue = profile.order_accept_start || settings.order_accept_start
+  const acceptEndValue = profile.order_accept_end || settings.order_accept_end
+  if (!acceptStartValue || !acceptEndValue) return true
   const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m }
+  const startMins = toMins(acceptStartValue)
+  const endMins = toMins(acceptEndValue)
   const nowMins = now.getHours() * 60 + now.getMinutes()
-  return nowMins >= toMins(settings.order_accept_start) && nowMins <= toMins(settings.order_accept_end)
+  if (startMins === endMins) return false
+  const isOvernight = startMins > endMins
+  const windowDay = isOvernight && nowMins <= endMins ? (now.getDay() + 6) % 7 : now.getDay()
+  if (!activeDays.includes(windowDay)) return false
+  if (startMins < endMins) return nowMins >= startMins && nowMins <= endMins
+  return nowMins >= startMins || nowMins <= endMins
 }
 
 /* --- DATE HELPERS --------------------------------------- */
@@ -1487,12 +1504,12 @@ async function handleCustomerBot(msg, pid) {
       }
       await sendText(pid, phone, welcome)
 
-      if (!isOrderWindowOpen(settings)) {
-        const s = settings.order_accept_start || "—"
-        const e = settings.order_accept_end   || "—"
-        const days = formatActiveDays(settings.active_days)
+      if (!isOrderWindowOpen(settings, profile)) {
+        const s = profile.order_accept_start || settings.order_accept_start || "—"
+        const e = profile.order_accept_end   || settings.order_accept_end || "—"
+        const days = formatActiveDays(profile.active_days || settings.active_days)
         await sendText(pid, phone,
-          `*Order window is currently closed.*\n\nWe accept order updates from *${formatTime12(s)}* to *${formatTime12(e)}* on *${days}*.\n\nChanges can only be made during these hours.`
+          `*Order window is currently closed.*\n\nWe accept order updates from *${formatOrderWindowText(s, e)}* on *${days}*.\n\nChanges can only be made during these hours.`
         )
       }
     }

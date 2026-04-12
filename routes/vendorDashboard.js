@@ -58,6 +58,34 @@ function addMinutesToTime(value, addMins) {
   return `${hh}:${mm}`
 }
 
+function isOvernightWindow(startMins, endMins) {
+  return startMins != null && endMins != null && startMins > endMins
+}
+
+function isWithinTimeWindow(nowMins, startMins, endMins) {
+  if (startMins == null || endMins == null) return true
+  if (startMins === endMins) return false
+  if (startMins < endMins) return nowMins >= startMins && nowMins <= endMins
+  return nowMins >= startMins || nowMins <= endMins
+}
+
+function overlapsNextDayDelivery(deliveryStart, deliveryEnd, acceptStart, acceptEnd) {
+  if (deliveryStart == null || deliveryEnd == null || acceptStart == null || acceptEnd == null) return false
+  if (acceptStart <= acceptEnd) return false
+  const acceptanceRange = { start: acceptStart, end: acceptEnd + 1440 }
+  const deliveryRange = { start: deliveryStart + 1440, end: deliveryEnd + 1440 }
+  return acceptanceRange.start < deliveryRange.end && deliveryRange.start < acceptanceRange.end
+}
+
+function getWindowActiveDay(now, startMins, endMins) {
+  const currentDay = now.getDay()
+  if (isOvernightWindow(startMins, endMins)) {
+    const nowMins = now.getHours() * 60 + now.getMinutes()
+    if (nowMins <= endMins) return (currentDay + 6) % 7
+  }
+  return currentDay
+}
+
 function validateSchedule(profile = {}, settings = {}) {
   const deliveryStart = timeToMinutes(profile.delivery_start)
   const deliveryEnd = timeToMinutes(profile.delivery_end)
@@ -74,11 +102,14 @@ function validateSchedule(profile = {}, settings = {}) {
   if (deliveryStart != null && deliveryEnd != null && deliveryStart >= deliveryEnd) {
     return "Delivery end time must be after delivery start time."
   }
-  if (acceptStart != null && acceptEnd != null && acceptStart >= acceptEnd) {
-    return "Order acceptance end time must be after order acceptance start time."
+  if (acceptStart != null && acceptEnd != null && acceptStart === acceptEnd) {
+    return "Order acceptance start and end time cannot be the same."
   }
-  if (deliveryEnd != null && acceptStart != null && acceptStart <= deliveryEnd) {
+  if (deliveryEnd != null && acceptStart != null && acceptStart < acceptEnd && acceptStart <= deliveryEnd) {
     return "Order acceptance must start after delivery end time."
+  }
+  if (overlapsNextDayDelivery(deliveryStart, deliveryEnd, acceptStart, acceptEnd)) {
+    return "Order acceptance window cannot continue into delivery time. Adjust the end time or delivery time."
   }
   if (settings.auto_generate_time && deliveryEnd != null && autoGenerate != null && autoGenerate < deliveryEnd) {
     return "Daily generation time cannot be earlier than delivery end time."
@@ -1066,10 +1097,10 @@ router.get("/order-window/:vendorId", async (req, res) => {
       const [eh, em] = p.order_accept_end.split(":").map(Number)
       const start = sh * 60 + sm
       const end   = eh * 60 + em
-      is_open     = hhmm >= start && hhmm <= end
+      is_open     = isWithinTimeWindow(hhmm, start, end)
 
-      const todayDay = now.getDay()
-      if (p.active_days && !p.active_days.includes(todayDay)) {
+      const activeDay = getWindowActiveDay(now, start, end)
+      if (p.active_days && !p.active_days.includes(activeDay)) {
         is_open = false
       }
     }

@@ -140,7 +140,7 @@ async function handleVendorBot(msg, phoneNumberId) {
       ? String(settings.auto_generate_time).slice(0, 5)
       : "Not set"
     const orderWindow = settings.order_window_enabled
-      ? `${String(settings.order_accept_start || "").slice(0, 5)} - ${String(settings.order_accept_end || "").slice(0, 5)}`
+      ? formatWindowLabel(settings.order_accept_start, settings.order_accept_end)
       : "Always open"
 
     const subsRes = await pool.query(
@@ -177,3 +177,16 @@ async function handleVendorBot(msg, phoneNumberId) {
 }
 
 module.exports = handleVendorBot
+function formatWindowLabel(start, end) {
+  if (!start || !end) return "Not set"
+  const toMins = (t) => {
+    const [h, m] = String(t).slice(0, 5).split(":").map(Number)
+    return (h * 60) + m
+  }
+  const startMins = toMins(start)
+  const endMins = toMins(end)
+  if (startMins > endMins) {
+    return `${String(start).slice(0, 5)} - next day ${String(end).slice(0, 5)}`
+  }
+  return `${String(start).slice(0, 5)} - ${String(end).slice(0, 5)}`
+}
