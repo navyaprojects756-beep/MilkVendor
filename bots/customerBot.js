@@ -1115,7 +1115,7 @@ async function downloadWhatsAppMedia(mediaId) {
 
 /* --- MENU SENDERS --------------------------------------- */
 
-async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts = false, showPrompt = false) {
+async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts = false, showPrompt = false, promptText = null) {
   const name = (profile?.business_name || "Milk Service").trim()
   const vendorId = profile?.vendor_id || sub?.vendor_id || pause?.vendor_id || null
 
@@ -1162,9 +1162,10 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     const custRow = await pool.query("SELECT customer_id FROM customers WHERE phone=$1 LIMIT 1", [phone])
     const pauseCId = custRow.rows[0]?.customer_id
     const pauseSummary = pauseCId ? await buildResumeSummary(pauseCId, vendorId, withProducts).catch(() => null) : null
+    const titleLine = promptText || `*${name}*`
     header = pauseSummary
-      ? `*${name}*\n\n${pauseDetails}\n\n${pauseSummary}`
-      : `*${name}*\n\n${pauseDetails}`
+      ? `${titleLine}\n\n${pauseDetails}\n\n${pauseSummary}`
+      : `${titleLine}\n\n${pauseDetails}`
     rows = [
       { id: "resume_pause", title: "Resume Daily Orders", description: "End pause & restart daily delivery" },
       { id: "profile",      title: "Profile",             description: "View or update your details"       },
@@ -1642,6 +1643,7 @@ async function handleCustomerBot(msg, pid) {
     const addr  = await getAddress(cId, vId)
     const pause = await getActivePause(cId, vId)
     const name  = (profile?.business_name || "Milk Service").trim()
+    let hasAnyActivity = false
 
     if (!state || isReset) {
       // -- New user with no address ? send registration flow --
@@ -1661,7 +1663,7 @@ async function handleCustomerBot(msg, pid) {
       }
 
       const menuCtxWelcome = await getMenuContextByPhone(phone, vId)
-      const hasAnyActivity = sub?.status === "active" || menuCtxWelcome.hasOrders || menuCtxWelcome.hasUpcomingAdhoc
+      hasAnyActivity = sub?.status === "active" || menuCtxWelcome.hasOrders || menuCtxWelcome.hasUpcomingAdhoc
 
       if (hasAnyActivity) {
         const summary = await buildResumeSummary(cId, vId, withProducts)
@@ -1676,7 +1678,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, sub, profile, pause, withProducts, true)
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts, true, hasAnyActivity ? "*Welcome back!*" : null)
     return
   }
 
@@ -2340,7 +2342,7 @@ async function handleCustomerBot(msg, pid) {
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
-      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts, false, cart.length > 0 ? "*Order Placed!*" : null)
       return
     }
 
@@ -2666,7 +2668,7 @@ async function handleCustomerBot(msg, pid) {
     const sub   = await getSubscription(cId, vId)
     const pause = await getActivePause(cId, vId)
     await setState(phone, "menu", vId)
-    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts, false, "*Order Placed!*")
     return
   }
 
