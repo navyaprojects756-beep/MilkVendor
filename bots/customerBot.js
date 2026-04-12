@@ -1171,6 +1171,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       { id: "get_invoice", title: "Get Bill",          description: "Download your bill"       }
     )
     if (withProducts) {
+      rows.unshift({ id: "adhoc_order",     title: adhocMenuTitle,  description: adhocMenuDesc })
       rows.unshift({ id: "manage_products", title: "Daily Subscription", description: "Choose your daily delivery products" })
     }
   }
