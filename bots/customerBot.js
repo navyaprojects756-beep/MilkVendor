@@ -997,12 +997,13 @@ async function restorePausedOrders(cId, vId) {
       const orderId = orderRes.rows[0]?.order_id
       if (!orderId) continue
 
-      await pool.query(`DELETE FROM order_items WHERE order_id=$1`, [orderId])
+      // Only replace subscription items — preserve any live adhoc items on this order
+      await pool.query(`DELETE FROM order_items WHERE order_id=$1 AND order_type='subscription'`, [orderId])
       await pool.query(
         `INSERT INTO order_items (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
          SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
          FROM paused_order_items_archive
-         WHERE archive_id=$2
+         WHERE archive_id=$2 AND order_type='subscription'
          ON CONFLICT (order_id, product_id, order_type)
          DO UPDATE SET
            quantity = EXCLUDED.quantity,
