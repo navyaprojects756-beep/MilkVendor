@@ -51,7 +51,7 @@ const REGISTRATION_FLOW_ID        = process.env.REGISTRATION_FLOW_ID
 const PRODUCT_LIST_FLOW_ID        = process.env.PRODUCT_LIST_FLOW_ID
 
 // -- Send Product List flow as free interactive message (within 24h session) --
-async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, mode = "sub") {
+async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, mode = "sub", ctaText = null) {
   await sendWhatsApp(pid, {
     messaging_product: "whatsapp",
     to:   phone,
@@ -65,7 +65,7 @@ async function sendProductListFlow(pid, phone, customerId, vendorId, bodyText, m
           flow_message_version: "3",
           flow_token:           `${vendorId}:${customerId}:${mode}`,
           flow_id:              PRODUCT_LIST_FLOW_ID,
-          flow_cta:             mode === "adhoc" ? "Order Tomorrow" : "Daily Products",
+          flow_cta:             ctaText || (mode === "adhoc" ? "Order Tomorrow" : "Daily Products"),
           flow_action:          "data_exchange"
         }
       }
@@ -1399,8 +1399,10 @@ async function handleCustomerBot(msg, pid) {
       return
     }
 
-    // Product List flow: state is manage_products or adhoc_product
+    // Product List flow: detect from state OR from flow token (for flows sent directly from welcome/order-placed)
+    const flowTokenMode = (formData?.flow_token || "").split(":")?.[2] // "sub" or "adhoc"
     const isProductListFlow = state?.state === "manage_products" || state?.state === "adhoc_product"
+                           || flowTokenMode === "sub" || flowTokenMode === "adhoc"
 
     if (isProductListFlow) {
       if (!isOrderWindowOpen(settings, profile)) {
@@ -1411,7 +1413,7 @@ async function handleCustomerBot(msg, pid) {
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
         return
       }
-      const isAdhoc = state?.state === "adhoc_product"
+      const isAdhoc = state?.state === "adhoc_product" || flowTokenMode === "adhoc"
 
     if (isAdhoc) {
       // -- Adhoc: cart was saved by flow endpoint — show confirmation --
@@ -1598,14 +1600,12 @@ async function handleCustomerBot(msg, pid) {
 
       if (hasAnyActivity) {
         const summary = await buildResumeSummary(cId, vId, withProducts)
-        const welcomeText = `*Welcome back!*\n\n${summary || formatAddress(addr)}`
+        await sendText(pid, phone, `*Welcome back!*\n\n${summary || formatAddress(addr)}`)
         if (withProducts) {
-          await sendButtons(pid, phone, welcomeText, [
-            { id: "manage_products", title: "Edit Daily Orders"  },
-            { id: "adhoc_order",     title: "Edit Extra Orders"  },
-          ])
-        } else {
-          await sendText(pid, phone, welcomeText)
+          await sendProductListFlow(pid, phone, cId, vId,
+            `Tap to update your daily subscription products.`, "sub", "Edit Daily Orders")
+          await sendProductListFlow(pid, phone, cId, vId,
+            `Tap to place or update your extra order for tomorrow.`, "adhoc", "Edit Extra Orders")
         }
       } else {
         await sendText(pid, phone, `*Welcome to ${name}!*\n\nFresh milk & dairy products delivered to your doorstep. `)
@@ -2266,13 +2266,12 @@ async function handleCustomerBot(msg, pid) {
         const orderPlacedText =
           `*Order Placed!*\n\n${summary}\n\n` +
           `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
+        await sendText(pid, phone, orderPlacedText)
         if (withProducts) {
-          await sendButtons(pid, phone, orderPlacedText, [
-            { id: "manage_products", title: "Edit Daily Orders"  },
-            { id: "adhoc_order",     title: "Edit Extra Orders"  },
-          ])
-        } else {
-          await sendText(pid, phone, orderPlacedText)
+          await sendProductListFlow(pid, phone, cId, vId,
+            `Tap to update your daily subscription products.`, "sub", "Edit Daily Orders")
+          await sendProductListFlow(pid, phone, cId, vId,
+            `Tap to place or update your extra order for tomorrow.`, "adhoc", "Edit Extra Orders")
         }
       }
 
