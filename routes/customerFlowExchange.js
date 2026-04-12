@@ -92,6 +92,11 @@ function istDateStr(d) {
 const MAX_SLOTS = 6
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN
 
+function getMaxQtyLimit(rawValue) {
+  const parsed = parseInt(rawValue, 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 async function sendWhatsApp(phoneNumberId, payload) {
   if (!phoneNumberId || !WHATSAPP_TOKEN) return
   try {
@@ -192,7 +197,7 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
     ),
   ])
 
-  const maxQtyPerOrder = parseInt(settingsRows[0]?.max_quantity_per_order || 10, 10) || 10
+  const maxQtyPerOrder = getMaxQtyLimit(settingsRows[0]?.max_quantity_per_order)
 
   /* Current subscription quantities (for pre-population) */
   let subMap = {}
@@ -233,7 +238,9 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
   }
 
   const data = {
-    max_qty_note: `Only enter packet count like 1, 2, 3. Max ${maxQtyPerOrder}.`,
+    max_qty_note: maxQtyPerOrder
+      ? `Only enter packet count like 1, 2, 3. Max ${maxQtyPerOrder}.`
+      : "Only enter packet count like 1, 2, 3.",
   }
 
   for (let i = 1; i <= MAX_SLOTS; i++) {
@@ -326,7 +333,7 @@ router.post("/", async (req, res) => {
            LIMIT 1`,
           [vendorId]
         )
-        const maxQtyPerOrder = parseInt(vendorSettingsRows[0]?.max_quantity_per_order || 10, 10) || 10
+        const maxQtyPerOrder = getMaxQtyLimit(vendorSettingsRows[0]?.max_quantity_per_order)
 
         const { rows: products } = await pool.query(
           `SELECT product_id, name, unit, price, delivery_charge
@@ -339,12 +346,15 @@ router.post("/", async (req, res) => {
         if (mode === "adhoc") {
           /* ── Adhoc: store cart in temp_data for confirmation step ── */
           const cartItems = []
+          let hadFlowInput = false
           for (let i = 0; i < products.length; i++) {
             const p   = products[i]
             const raw = readQty(flowData, i + 1)
             if (!raw || String(raw).trim() === "") continue
+            hadFlowInput = true
             const qty = parseInt(raw)
-            if (isNaN(qty) || qty < 1 || qty > maxQtyPerOrder) continue
+            if (isNaN(qty) || qty < 0 || (maxQtyPerOrder && qty > maxQtyPerOrder)) continue
+            if (qty === 0) continue
             cartItems.push({
               product_id:   p.product_id,
               product_name: p.name,
@@ -355,19 +365,25 @@ router.post("/", async (req, res) => {
             console.log(`  Adhoc item: ${p.name} × ${qty}`)
           }
 
-          if (cartItems.length > 0) {
+          if (true) {
             const policy = await getVendorDeliveryPolicy(vendorId)
-            const deliveryCharge = computeOrderDeliveryCharge(
-              cartItems.map((item) => ({ quantity: item.qty, order_type: "adhoc" })),
-              policy
-            )
+            const deliveryCharge = cartItems.length > 0
+              ? computeOrderDeliveryCharge(
+                  cartItems.map((item) => ({ quantity: item.qty, order_type: "adhoc" })),
+                  policy
+                )
+              : 0
             /* Store cart in customer's conversation_state temp_data */
             await pool.query(`
               UPDATE conversation_state
               SET temp_data = COALESCE(temp_data, '{}'::jsonb) || $1::jsonb
               WHERE phone = (SELECT phone FROM customers WHERE customer_id=$2 LIMIT 1)
             `, [
-              JSON.stringify({ flow_cart: cartItems, flow_delivery_charge: deliveryCharge }),
+              JSON.stringify({
+                flow_cart: cartItems,
+                flow_delivery_charge: deliveryCharge,
+                flow_adhoc_submitted: hadFlowInput,
+              }),
               customerId,
             ])
             console.log(`Adhoc cart stored (${cartItems.length} items), delivery: ₹${deliveryCharge}`)
@@ -383,14 +399,15 @@ router.post("/", async (req, res) => {
             const raw = readQty(flowData, i + 1)
             if (raw === undefined || raw === null || String(raw).trim() === "") continue
             const qty = parseInt(raw)
-            if (isNaN(qty) || qty < 0 || qty > maxQtyPerOrder) continue
+            if (isNaN(qty) || qty < 0 || (maxQtyPerOrder && qty > maxQtyPerOrder)) continue
 
             console.log(`  Sub: ${p.name} qty=${qty}`)
             anyChanged = true
 
             if (qty === 0) {
               await pool.query(`
-                UPDATE customer_subscriptions SET is_active=false
+                UPDATE customer_subscriptions
+                SET is_active=false, quantity=0
                 WHERE customer_id=$1 AND vendor_id=$2 AND product_id=$3
               `, [customerId, vendorId, p.product_id])
             } else {
@@ -402,16 +419,24 @@ router.post("/", async (req, res) => {
                 DO UPDATE SET quantity=$4, is_active=true, vendor_id=$2
               `, [customerId, vendorId, p.product_id, qty])
 
-              await pool.query(`
-                INSERT INTO subscriptions (customer_id, vendor_id, quantity, status)
-                VALUES ($1,$2,$3,'active')
-                ON CONFLICT (customer_id, vendor_id)
-                DO UPDATE SET status='active', quantity=$3
-              `, [customerId, vendorId, qty])
             }
           }
 
           if (anyChanged) {
+            const { rows: activeSubRows } = await pool.query(`
+              SELECT COALESCE(SUM(quantity), 0) AS total_qty
+              FROM customer_subscriptions
+              WHERE customer_id=$1 AND vendor_id=$2 AND is_active=true AND quantity > 0
+            `, [customerId, vendorId])
+            const totalQty = parseInt(activeSubRows[0]?.total_qty || 0, 10) || 0
+
+            await pool.query(`
+              INSERT INTO subscriptions (customer_id, vendor_id, quantity, status)
+              VALUES ($1,$2,$3,$4)
+              ON CONFLICT (customer_id, vendor_id)
+              DO UPDATE SET status=$4, quantity=$3
+            `, [customerId, vendorId, totalQty, totalQty > 0 ? "active" : "inactive"])
+
             await cleanupTodaySubscriptionOrders(customerId, vendorId)
             /* Mark as saved so customerBot confirmation message is shown */
             await pool.query(`

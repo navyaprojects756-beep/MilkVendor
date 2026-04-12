@@ -637,6 +637,68 @@ async function cleanupTodayAdhocOrders(cId, vId) {
   `, [cId, vId, today])
 }
 
+async function replaceUpcomingAdhocOrder(cId, vId, orderDate, cart = []) {
+  const existingOrderRes = await pool.query(`
+    SELECT order_id
+    FROM orders
+    WHERE customer_id = $1
+      AND vendor_id = $2
+      AND order_date = $3::date
+    LIMIT 1
+  `, [cId, vId, orderDate])
+
+  let orderId = existingOrderRes.rows[0]?.order_id || null
+
+  if (orderId) {
+    await pool.query(`
+      DELETE FROM order_items
+      WHERE order_id = $1
+        AND order_type = 'adhoc'
+    `, [orderId])
+
+    const { rows: itemRows } = await pool.query(`
+      SELECT 1
+      FROM order_items
+      WHERE order_id = $1
+      LIMIT 1
+    `, [orderId])
+
+    if (itemRows.length === 0 && cart.length === 0) {
+      await pool.query(`DELETE FROM orders WHERE order_id = $1`, [orderId])
+      return null
+    }
+  }
+
+  if (!orderId && cart.length > 0) {
+    const { rows: orderRows } = await pool.query(`
+      INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
+      VALUES ($1,$2,$3,0)
+      ON CONFLICT (customer_id, vendor_id, order_date)
+      DO UPDATE SET quantity = orders.quantity
+      RETURNING order_id
+    `, [cId, vId, orderDate])
+    orderId = orderRows[0].order_id
+  }
+
+  if (orderId && cart.length > 0) {
+    for (const item of cart) {
+      await pool.query(`
+        INSERT INTO order_items
+          (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
+        VALUES ($1,$2,$3,$4,$5,'adhoc')
+        ON CONFLICT (order_id, product_id, order_type)
+        DO UPDATE SET quantity=$3, price_at_order=$4, delivery_charge_at_order=$5, order_type='adhoc'
+      `, [orderId, item.product_id, item.qty, item.price, 0])
+    }
+  }
+
+  if (orderId) {
+    await refreshOrderTotals(orderId)
+  }
+
+  return orderId
+}
+
 async function getAddress(cId, vId) {
   const r = await pool.query(`
     SELECT cv.*, a.name AS apartment_name, b.block_name
@@ -1350,17 +1412,34 @@ async function handleCustomerBot(msg, pid) {
       }
       const isAdhoc = state?.state === "adhoc_product"
 
-      if (isAdhoc) {
-        // -- Adhoc: cart was saved by flow endpoint — show confirmation --
-        const freshState = await getState(phone)
-        const cart       = freshState?.temp_data?.flow_cart || []
-        const policy     = await getVendorDeliveryPolicy(vId)
-        const delCharge  = computeCartDeliveryCharge(cart, policy)
+    if (isAdhoc) {
+      // -- Adhoc: cart was saved by flow endpoint — show confirmation --
+      const freshState = await getState(phone)
+      const cart       = freshState?.temp_data?.flow_cart || []
+      const adhocSubmitted = !!freshState?.temp_data?.flow_adhoc_submitted
+      const policy     = await getVendorDeliveryPolicy(vId)
+      const delCharge  = computeCartDeliveryCharge(cart, policy)
 
-        if (cart.length === 0) {
-          // Nothing entered in the flow
-          await sendText(pid, phone, "No items selected. Please enter a quantity for at least one product.")
-          const sub   = await getSubscription(cId, vId)
+      if (cart.length === 0) {
+        if (adhocSubmitted) {
+          const tom = istTomorrowStr()
+          await sendButtons(pid, phone,
+            `*Update Tomorrow's Order*\n\nNo products selected for ${displayDate(tom)}.\n\nConfirm to remove the extra items from your upcoming order.`,
+            [
+              { id: "flow_confirm_order", title: "Confirm Update" },
+              { id: "flow_cancel_order",  title: "Cancel"         },
+            ]
+          )
+          await setState(phone, "flow_adhoc_confirm", vId, {
+            flow_cart:            [],
+            flow_delivery_charge: 0,
+            flow_adhoc_submitted: true,
+          })
+          return
+        }
+        // Nothing entered in the flow
+        await sendText(pid, phone, "No items selected. Please enter a quantity for at least one product.")
+        const sub   = await getSubscription(cId, vId)
           const pause = await getActivePause(cId, vId)
           await setState(phone, "menu", vId)
           await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -1378,6 +1457,7 @@ async function handleCustomerBot(msg, pid) {
         await setState(phone, "flow_adhoc_confirm", vId, {
           flow_cart:             cart,
           flow_delivery_charge:  delCharge,
+          flow_adhoc_submitted:  adhocSubmitted,
         })
         return
       }
@@ -2115,6 +2195,7 @@ async function handleCustomerBot(msg, pid) {
 
   if (state.state === "flow_adhoc_confirm") {
     const cart      = state.temp_data?.flow_cart || []
+    const adhocSubmitted = !!state.temp_data?.flow_adhoc_submitted
     const policy    = await getVendorDeliveryPolicy(vId)
     const delCharge = computeCartDeliveryCharge(cart, policy)
 
@@ -2137,7 +2218,7 @@ async function handleCustomerBot(msg, pid) {
     }
 
     if (input === "flow_confirm_order") {
-      if (cart.length === 0) {
+      if (cart.length === 0 && !adhocSubmitted) {
         const sub   = await getSubscription(cId, vId)
         const pause = await getActivePause(cId, vId)
         await setState(phone, "menu", vId)
@@ -2147,34 +2228,14 @@ async function handleCustomerBot(msg, pid) {
 
       const tomorrow = istTomorrowStr()
       await cleanupTodayAdhocOrders(cId, vId)
-
-      const { rows: orderRows } = await pool.query(`
-        INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
-        VALUES ($1,$2,$3,0)
-        ON CONFLICT (customer_id, vendor_id, order_date)
-        DO UPDATE SET quantity = orders.quantity
-        RETURNING order_id
-      `, [cId, vId, tomorrow])
-      const orderId = orderRows[0].order_id
-
-      for (let idx = 0; idx < cart.length; idx++) {
-        const item = cart[idx]
-        await pool.query(`
-          INSERT INTO order_items
-            (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
-          VALUES ($1,$2,$3,$4,$5,'adhoc')
-          ON CONFLICT (order_id, product_id, order_type)
-          DO UPDATE SET quantity=$3, price_at_order=$4, delivery_charge_at_order=$5, order_type='adhoc'
-        `, [orderId, item.product_id, item.qty, item.price, 0])
-      }
-
-      await refreshOrderTotals(orderId)
+      await replaceUpcomingAdhocOrder(cId, vId, tomorrow, cart)
 
       const timingLine = formatDeliveryWindow(profile)
 
       const summary = await buildResumeSummary(cId, vId, withProducts)
+      const headline = cart.length > 0 ? "*Order Placed!*" : "*Order updated!*"
       await sendText(pid, phone,
-        `*Order Placed!*\n\n${summary}\n\n` +
+        `${headline}\n\n${summary}\n\n` +
         `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
       )
 
@@ -2489,38 +2550,12 @@ async function handleCustomerBot(msg, pid) {
 
     const tomorrow = istTomorrowStr()
     await cleanupTodayAdhocOrders(cId, vId)
-
-    // Find or create order for tomorrow
-    const { rows: orderRows } = await pool.query(`
-      INSERT INTO orders (customer_id, vendor_id, order_date, quantity)
-      VALUES ($1,$2,$3,0)
-      ON CONFLICT (customer_id, vendor_id, order_date)
-      DO UPDATE SET quantity = orders.quantity
-      RETURNING order_id
-    `, [cId, vId, tomorrow])
-    const orderId = orderRows[0].order_id
-
-    // Insert all cart items
-    for (const item of cart) {
-      await pool.query(`
-        INSERT INTO order_items (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
-        VALUES ($1,$2,$3,$4,$5,'adhoc')
-        ON CONFLICT (order_id, product_id, order_type)
-        DO UPDATE SET
-          quantity = order_items.quantity + EXCLUDED.quantity,
-          price_at_order = EXCLUDED.price_at_order,
-          delivery_charge_at_order = EXCLUDED.delivery_charge_at_order,
-          order_type = 'adhoc'
-      `, [orderId, item.product_id, item.qty, item.price, 0])
-    }
-
-    await refreshOrderTotals(orderId)
+    const orderId = await replaceUpcomingAdhocOrder(cId, vId, tomorrow, cart)
 
     const addr      = await getAddress(cId, vId)
-    const { rows: orderAfterRows } = await pool.query(
-      "SELECT delivery_charge_amount FROM orders WHERE order_id = $1",
-      [orderId]
-    )
+    const orderAfterRows = orderId
+      ? (await pool.query("SELECT delivery_charge_amount FROM orders WHERE order_id = $1", [orderId])).rows
+      : []
     const orderDelivery = parseFloat(orderAfterRows[0]?.delivery_charge_amount || 0)
     const timingLine = formatDeliveryWindow(profile)
 

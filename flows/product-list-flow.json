@@ -45,14 +45,26 @@
         "type": "SingleColumnLayout",
         "children": [
           {
+            "type": "Form",
+            "name": "daily_product_selection",
+            "init-values": {
+              "qty_1": "${data.qty_1_init}",
+              "qty_2": "${data.qty_2_init}",
+              "qty_3": "${data.qty_3_init}",
+              "qty_4": "${data.qty_4_init}",
+              "qty_5": "${data.qty_5_init}",
+              "qty_6": "${data.qty_6_init}"
+            },
+            "children": [
+              {
             "type": "TextBody",
             "text": "Choose only the products you want daily. Enter packet count only."
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.max_qty_note}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_1",
             "label": "${data.product_1_name}",
@@ -71,13 +83,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_1}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_1_price}",
             "visible": "${data.show_product_1}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_2",
             "label": "${data.product_2_name}",
@@ -96,13 +108,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_2}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_2_price}",
             "visible": "${data.show_product_2}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_3",
             "label": "${data.product_3_name}",
@@ -121,13 +133,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_3}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_3_price}",
             "visible": "${data.show_product_3}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_4",
             "label": "${data.product_4_name}",
@@ -146,13 +158,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_4}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_4_price}",
             "visible": "${data.show_product_4}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_5",
             "label": "${data.product_5_name}",
@@ -171,13 +183,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_5}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_5_price}",
             "visible": "${data.show_product_5}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_6",
             "label": "${data.product_6_name}",
@@ -196,13 +208,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_6}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_6_price}",
             "visible": "${data.show_product_6}"
-          },
-          {
+              },
+              {
             "type": "Footer",
             "label": "Submit",
             "on-click-action": {
@@ -216,6 +228,8 @@
                 "qty_6": "${form.qty_6}"
               }
             }
+              }
+            ]
           }
         ]
       }
@@ -259,14 +273,26 @@
         "type": "SingleColumnLayout",
         "children": [
           {
+            "type": "Form",
+            "name": "adhoc_product_selection",
+            "init-values": {
+              "qty_1": "${data.qty_1_init}",
+              "qty_2": "${data.qty_2_init}",
+              "qty_3": "${data.qty_3_init}",
+              "qty_4": "${data.qty_4_init}",
+              "qty_5": "${data.qty_5_init}",
+              "qty_6": "${data.qty_6_init}"
+            },
+            "children": [
+              {
             "type": "TextBody",
             "text": "Choose only the products you want for tomorrow. Enter packet count only."
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.max_qty_note}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_1",
             "label": "${data.product_1_name}",
@@ -285,13 +311,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_1}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_1_price}",
             "visible": "${data.show_product_1}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_2",
             "label": "${data.product_2_name}",
@@ -310,13 +336,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_2}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_2_price}",
             "visible": "${data.show_product_2}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_3",
             "label": "${data.product_3_name}",
@@ -335,13 +361,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_3}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_3_price}",
             "visible": "${data.show_product_3}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_4",
             "label": "${data.product_4_name}",
@@ -360,13 +386,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_4}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_4_price}",
             "visible": "${data.show_product_4}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_5",
             "label": "${data.product_5_name}",
@@ -385,13 +411,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_5}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_5_price}",
             "visible": "${data.show_product_5}"
-          },
-          {
+              },
+              {
             "type": "Dropdown",
             "name": "qty_6",
             "label": "${data.product_6_name}",
@@ -410,13 +436,13 @@
               { "id": "10", "title": "10 packets" }
             ],
             "visible": "${data.show_product_6}"
-          },
-          {
+              },
+              {
             "type": "TextBody",
             "text": "${data.product_6_price}",
             "visible": "${data.show_product_6}"
-          },
-          {
+              },
+              {
             "type": "Footer",
             "label": "Submit",
             "on-click-action": {
@@ -430,6 +456,8 @@
                 "qty_6": "${form.qty_6}"
               }
             }
+              }
+            ]
           }
         ]
       }
