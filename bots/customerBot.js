@@ -274,6 +274,15 @@ function isOrderWindowOpen(settings, profile = {}) {
   return nowMins >= startMins || nowMins <= endMins
 }
 
+async function sendOrderWindowClosedMessage(pid, phone, settings, profile = {}) {
+  const s = profile.order_accept_start || settings.order_accept_start || "—"
+  const e = profile.order_accept_end   || settings.order_accept_end || "—"
+  const days = formatActiveDays(profile.active_days || settings.active_days)
+  await sendText(pid, phone,
+    `*Order window is currently closed.*\n\nWe accept order updates from *${formatOrderWindowText(s, e)}* on *${days}*.\n\nChanges can only be made during these hours.`
+  )
+}
+
 /* --- DATE HELPERS --------------------------------------- */
 
 function getISTNow() {
@@ -1247,6 +1256,15 @@ async function startAddressFlow(pid, phone, customerId, vendor, afterAddr = fals
 }
 
 async function confirmQty(pid, phone, cId, vId, qty, price, profile, withProducts = false) {
+  const settings = await getSettings(vId)
+  if (!isOrderWindowOpen(settings, profile)) {
+    const sub = await getSubscription(cId, vId)
+    const pause = await getActivePause(cId, vId)
+    await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+    await setState(phone, "menu", vId)
+    await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+    return
+  }
   await saveSubscription(cId, vId, qty)
   await cleanupTodaySubscriptionOrders(cId, vId)
   const addr  = await getAddress(cId, vId)
@@ -1336,6 +1354,14 @@ async function handleCustomerBot(msg, pid) {
     const isProductListFlow = state?.state === "manage_products" || state?.state === "adhoc_product"
 
     if (isProductListFlow) {
+      if (!isOrderWindowOpen(settings, profile)) {
+        await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+        const sub = await getSubscription(cId, vId)
+        const pause = await getActivePause(cId, vId)
+        await setState(phone, "menu", vId)
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       const isAdhoc = state?.state === "adhoc_product"
 
       if (isAdhoc) {
@@ -1505,12 +1531,7 @@ async function handleCustomerBot(msg, pid) {
       await sendText(pid, phone, welcome)
 
       if (!isOrderWindowOpen(settings, profile)) {
-        const s = profile.order_accept_start || settings.order_accept_start || "—"
-        const e = profile.order_accept_end   || settings.order_accept_end || "—"
-        const days = formatActiveDays(profile.active_days || settings.active_days)
-        await sendText(pid, phone,
-          `*Order window is currently closed.*\n\nWe accept order updates from *${formatOrderWindowText(s, e)}* on *${days}*.\n\nChanges can only be made during these hours.`
-        )
+        await sendOrderWindowClosedMessage(pid, phone, settings, profile)
       }
     }
 
@@ -1527,6 +1548,11 @@ async function handleCustomerBot(msg, pid) {
 
     // -- Manage per-product subscriptions --
     if (input === "manage_products") {
+      if (!isOrderWindowOpen(settings, profile)) {
+        await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       const products = await getVendorProducts(vId, "subscription")
       if (products.length === 0) {
         await sendText(pid, phone, "No subscription products available right now. Please check back later.")
@@ -1542,6 +1568,11 @@ async function handleCustomerBot(msg, pid) {
 
     // -- Adhoc / Quick Order --
     if (input === "adhoc_order") {
+      if (!isOrderWindowOpen(settings, profile)) {
+        await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       const products = await getVendorProducts(vId, "adhoc")
       if (products.length === 0) {
         await sendText(pid, phone, "No quick-order products available right now.")
@@ -1559,6 +1590,11 @@ async function handleCustomerBot(msg, pid) {
 
     // Subscribe (new or re-subscribe)
     if (input === "subscribe") {
+      if (!isOrderWindowOpen(settings, profile)) {
+        await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       if (!withProducts) {
         await sendText(pid, phone, "Daily products are not available for this vendor right now.")
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -1597,6 +1633,11 @@ async function handleCustomerBot(msg, pid) {
 
     // Change quantity
     if (input === "change") {
+      if (!isOrderWindowOpen(settings, profile)) {
+        await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+        await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+        return
+      }
       if (!withProducts) {
         await sendText(pid, phone, "Daily products are not available for this vendor right now.")
         await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -2091,6 +2132,15 @@ async function handleCustomerBot(msg, pid) {
     const policy    = await getVendorDeliveryPolicy(vId)
     const delCharge = computeCartDeliveryCharge(cart, policy)
 
+    if (!isOrderWindowOpen(settings, profile)) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
+
     if (input === "flow_cancel_order") {
       await sendText(pid, phone, "*Order cancelled.* No order has been placed.")
       const sub   = await getSubscription(cId, vId)
@@ -2203,6 +2253,14 @@ async function handleCustomerBot(msg, pid) {
   /* -- Product quantity entry (subscription management) -- */
 
   if (state.state === "product_qty") {
+    if (!isOrderWindowOpen(settings, profile)) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
     const qty = parseInt((input || "").trim())
     if (isNaN(qty) || qty < 0) {
       await resetToMainMenuWithSupportReply()
@@ -2261,6 +2319,14 @@ async function handleCustomerBot(msg, pid) {
   /* -- Adhoc: product list (cart-based multi-select) -- */
 
   if (state.state === "adhoc_product") {
+    if (!isOrderWindowOpen(settings, profile)) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
     const cart = state.temp_data?.cart || []
 
     if (input === "menu") {
@@ -2320,6 +2386,14 @@ async function handleCustomerBot(msg, pid) {
   /* -- Adhoc: quantity entry -- */
 
   if (state.state === "adhoc_qty") {
+    if (!isOrderWindowOpen(settings, profile)) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
     const qty = parseInt((input || "").trim())
     if (isNaN(qty) || qty < 1) {
       await resetToMainMenuWithSupportReply()
@@ -2360,6 +2434,14 @@ async function handleCustomerBot(msg, pid) {
   /* -- Adhoc: cart view (after adding item) -- */
 
   if (state.state === "adhoc_cart") {
+    if (!isOrderWindowOpen(settings, profile)) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
     const cart = state.temp_data?.cart || []
 
     if (input === "adhoc_add_more" || input === "adhoc_more") {
@@ -2390,6 +2472,14 @@ async function handleCustomerBot(msg, pid) {
   /* -- Adhoc: order confirmation -- */
 
   if (state.state === "adhoc_confirm") {
+    if (!isOrderWindowOpen(settings, profile)) {
+      const sub   = await getSubscription(cId, vId)
+      const pause = await getActivePause(cId, vId)
+      await sendOrderWindowClosedMessage(pid, phone, settings, profile)
+      await setState(phone, "menu", vId)
+      await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
+      return
+    }
     const cart = state.temp_data?.cart || []
 
     if (input === "adhoc_more" || input === "adhoc_add_more") {
