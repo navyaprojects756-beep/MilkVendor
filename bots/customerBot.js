@@ -502,15 +502,15 @@ async function getCustomerById(customerId) {
 
 async function getMenuContextByPhone(phone, vendorId) {
   if (!phone || !vendorId) {
-    return { hasViewData: false, hasProductSubs: false, hasOrders: false }
+    return { hasViewData: false, hasProductSubs: false, hasOrders: false, hasUpcomingAdhoc: false }
   }
 
   const customer = await getCustomer(phone)
   if (!customer?.customer_id) {
-    return { hasViewData: false, hasProductSubs: false, hasOrders: false }
+    return { hasViewData: false, hasProductSubs: false, hasOrders: false, hasUpcomingAdhoc: false }
   }
 
-  const [prodSubsRes, ordersRes] = await Promise.all([
+  const [prodSubsRes, ordersRes, adhocRes] = await Promise.all([
     pool.query(
       `SELECT COUNT(*) AS cnt
        FROM customer_subscriptions
@@ -523,14 +523,27 @@ async function getMenuContextByPhone(phone, vendorId) {
        WHERE customer_id=$1 AND vendor_id=$2`,
       [customer.customer_id, vendorId]
     ),
+    pool.query(
+      `SELECT COUNT(*) AS cnt
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.order_id
+       WHERE o.customer_id=$1
+         AND o.vendor_id=$2
+         AND COALESCE(o.is_delivered, false)=false
+         AND o.order_date >= $3
+         AND oi.order_type='adhoc'`,
+      [customer.customer_id, vendorId, getISTDateStr(1)]
+    ),
   ])
 
   const hasProductSubs = parseInt(prodSubsRes.rows[0]?.cnt || 0, 10) > 0
   const hasOrders = parseInt(ordersRes.rows[0]?.cnt || 0, 10) > 0
+  const hasUpcomingAdhoc = parseInt(adhocRes.rows[0]?.cnt || 0, 10) > 0
 
   return {
     hasProductSubs,
     hasOrders,
+    hasUpcomingAdhoc,
     hasViewData: hasProductSubs || hasOrders,
   }
 }
@@ -1032,6 +1045,8 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
   const name = (profile?.business_name || "Milk Service").trim()
   const vendorId = profile?.vendor_id || sub?.vendor_id || pause?.vendor_id || null
   const menuCtx = await getMenuContextByPhone(phone, vendorId)
+  const adhocMenuTitle = menuCtx.hasUpcomingAdhoc ? "Change Order Tomorrow" : "Order Tomorrow"
+  const adhocMenuDesc = menuCtx.hasUpcomingAdhoc ? "Update your extra products for tomorrow" : "Order extra products for tomorrow"
   let header, rows
 
   if (!sub) {
@@ -1043,7 +1058,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     if (withProducts) {
       rows.push(
         { id: "manage_products", title: "Daily Subscription", description: "Choose your daily delivery products" },
-        { id: "adhoc_order",     title: "Order Tomorrow",     description: "Order extra products for tomorrow" },
+        { id: "adhoc_order",     title: adhocMenuTitle,       description: adhocMenuDesc },
         { id: "profile",         title: "Profile",         description: "View or update your details" }
       )
     } else {
@@ -1069,7 +1084,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     ]
     if (withProducts) {
       rows.splice(1, 0, { id: "manage_products", title: "Change Daily Products", description: "Update your daily delivery products" })
-      rows.splice(2, 0, { id: "adhoc_order",     title: "Order Tomorrow",        description: "Order extra products for tomorrow" })
+      rows.splice(2, 0, { id: "adhoc_order",     title: adhocMenuTitle,          description: adhocMenuDesc })
     }
   } else {
     header = showPrompt ? `*${name}*\n\nHow can we help you today?` : `*${name}*`
