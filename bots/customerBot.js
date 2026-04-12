@@ -1544,9 +1544,27 @@ async function handleCustomerBot(msg, pid) {
   const inputLower = (input || "").toLowerCase()
 
   const resetToMainMenuWithSupportReply = async () => {
-    // If customer has no address, show registration flow instead of support reply
+    // If customer has no address, save message + show support reply + then registration flow
     const addr = await getAddress(cId, vId)
     if (!addr) {
+      // Save inbound message so vendor sees it
+      let msgContent = null, msgType = "text", mediaId = null
+      if (msg.type === "text") { msgContent = input || msg.text?.body?.trim() || null }
+      else if (msg.type === "image")    { msgType = "image";    mediaId = msg.image?.id;    msgContent = msg.image?.caption || null }
+      else if (msg.type === "document") { msgType = "document"; mediaId = msg.document?.id; msgContent = msg.document?.caption || null }
+      else if (msg.type === "audio")    { msgType = "audio";    mediaId = msg.audio?.id }
+      else if (msg.type === "video")    { msgType = "video";    mediaId = msg.video?.id;    msgContent = msg.video?.caption || null }
+      if (msgContent || mediaId) await saveInboundMessage(vId, cId, phone, msgType, msgContent, mediaId)
+
+      // Show support reply first
+      const vendorPhone = profile.whatsapp_number || ""
+      await sendText(pid, phone,
+        vendorPhone
+          ? `We received your message.\n\nFor immediate help, please call:\n*${vendorPhone}*`
+          : `We received your message and will get back to you if needed.`
+      )
+
+      // Then show registration flow
       const bizName = (profile?.business_name || "MilkRoute").trim()
       await sendText(pid, phone,
         `Welcome to *${bizName}*!\n\nTo start receiving daily deliveries, please complete your account setup by tapping the button below.`
