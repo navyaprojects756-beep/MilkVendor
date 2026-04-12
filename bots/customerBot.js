@@ -1544,6 +1544,23 @@ async function handleCustomerBot(msg, pid) {
   const inputLower = (input || "").toLowerCase()
 
   const resetToMainMenuWithSupportReply = async () => {
+    // If customer has no address, show registration flow instead of support reply
+    const addr = await getAddress(cId, vId)
+    if (!addr) {
+      const bizName = (profile?.business_name || "MilkRoute").trim()
+      await sendText(pid, phone,
+        `Welcome to *${bizName}*!\n\nTo start receiving daily deliveries, please complete your account setup by tapping the button below.`
+      )
+      const sent = await sendRegistrationFlow(pid, phone, vId, cId, bizName)
+      if (sent) {
+        await setState(phone, "awaiting_registration", vId)
+      } else {
+        await setState(phone, "menu", vId)
+        await sendText(pid, phone, "We could not open the profile form right now. Please try again in a moment.")
+      }
+      return
+    }
+
     let msgContent = null
     let msgType = "text"
     let mediaId = null
