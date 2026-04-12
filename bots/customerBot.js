@@ -1156,15 +1156,23 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
       rows.push({ id: "profile", title: "Profile", description: "View or update your details" })
     }
   } else if (sub.status === "active" && pause) {
-    const details = pause.pause_until
-      ? `Delivery paused from *${displayDate(pause.pause_from)}* to *${displayDate(pause.pause_until)}*.\n\nAll deliveries in this period, including daily subscription and tomorrow orders, are paused.`
-      : `Delivery paused from *${displayDate(pause.pause_from)}* until you resume.\n\nAll deliveries from this date onward, including daily subscription and tomorrow orders, are paused.`
-    header = `*${name}*\n\n${details}`
+    const pauseDetails = pause.pause_until
+      ? `*Daily products paused* from *${displayDate(pause.pause_from)}* to *${displayDate(pause.pause_until)}*.\nYour daily subscription deliveries are skipped during this period.\n_(Extra/adhoc orders are not affected)_`
+      : `*Daily products paused* from *${displayDate(pause.pause_from)}* until you resume.\nYour daily subscription deliveries are paused until you resume.\n_(Extra/adhoc orders are not affected)_`
+    const custRow = await pool.query("SELECT customer_id FROM customers WHERE phone=$1 LIMIT 1", [phone])
+    const pauseCId = custRow.rows[0]?.customer_id
+    const pauseSummary = pauseCId ? await buildResumeSummary(pauseCId, vendorId, withProducts).catch(() => null) : null
+    header = pauseSummary
+      ? `*${name}*\n\n${pauseDetails}\n\n${pauseSummary}`
+      : `*${name}*\n\n${pauseDetails}`
     rows = [
-      { id: "resume_pause", title: "Resume Now",         description: "End pause & restart delivery"  },
-      { id: "profile",      title: "Profile",            description: "View or update your details"   },
-      { id: "get_invoice",  title: "Get Bill",           description: "Download your bill"            },
+      { id: "resume_pause", title: "Resume Daily Orders", description: "End pause & restart daily delivery" },
+      { id: "profile",      title: "Profile",             description: "View or update your details"       },
+      { id: "get_invoice",  title: "Get Bill",            description: "Download your bill"               },
     ]
+    if (withProducts) {
+      rows.splice(1, 0, { id: "adhoc_order", title: adhocMenuTitle, description: adhocMenuDesc })
+    }
   } else if (sub.status === "active") {
     header = showPrompt ? `*${name}*\n\nHow can we help you today?` : `*${name}*`
     rows = [
@@ -1176,6 +1184,11 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     if (withProducts) {
       rows.splice(1, 0, { id: "manage_products", title: "Change Daily Products", description: "Update your daily delivery products" })
       rows.splice(2, 0, { id: "adhoc_order",     title: adhocMenuTitle,          description: adhocMenuDesc })
+      // Only show Pause if customer has active daily product subscriptions
+      if (!menuCtx.hasProductSubs) {
+        const pauseIdx = rows.findIndex(r => r.id === "pause")
+        if (pauseIdx !== -1) rows.splice(pauseIdx, 1)
+      }
     }
   } else {
     header = showPrompt ? `*${name}*\n\nHow can we help you today?` : `*${name}*`
@@ -1920,12 +1933,16 @@ async function handleCustomerBot(msg, pid) {
 
     const dayMatch = input.match(/^pause_(\d+)$/)
     if (dayMatch) {
-      const days      = parseInt(dayMatch[1])
-      const from      = dateToStr(tomorrow)
-      const until     = dateToStr(addDays(tomorrow, days - 1))
-      const label     = days === 7 ? "1 Week" : days === 14 ? "2 Weeks" : days === 30 ? "1 Month" : `${days} Day${days > 1 ? "s" : ""}`
+      const days  = parseInt(dayMatch[1])
+      const from  = dateToStr(tomorrow)
+      const until = dateToStr(addDays(tomorrow, days - 1))
       await savePause(cId, vId, from, until)
       await removePausedOrders(cId, vId, from, until)
+      const summary = await buildResumeSummary(cId, vId, withProducts)
+      await sendText(pid, phone,
+        `*Daily Delivery Paused*\n\nYour daily subscription products are paused from *${displayDate(from)}* to *${displayDate(until)}*.\n\n_Extra/adhoc orders are not affected — you can still place quick orders during this period._` +
+        (summary ? `\n\n${summary}` : "")
+      )
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
@@ -1937,6 +1954,11 @@ async function handleCustomerBot(msg, pid) {
       const from = dateToStr(tomorrow)
       await savePause(cId, vId, from, null)
       await removePausedOrders(cId, vId, from, null)
+      const summary = await buildResumeSummary(cId, vId, withProducts)
+      await sendText(pid, phone,
+        `*Daily Delivery Paused*\n\nYour daily subscription products are paused from *${displayDate(from)}* until you resume.\n\n_Extra/adhoc orders are not affected — you can still place quick orders during this period._` +
+        (summary ? `\n\n${summary}` : "")
+      )
       const s = await getSubscription(cId, vId)
       const p = await getActivePause(cId, vId)
       await setState(phone, "menu", vId)
