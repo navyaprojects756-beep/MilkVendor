@@ -368,7 +368,7 @@ async function restorePausedOrders(customerId, vendorId) {
          SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
          FROM paused_order_items_archive
          WHERE archive_id=$2
-         ON CONFLICT (order_id, product_id)
+         ON CONFLICT (order_id, product_id, order_type)
          DO UPDATE SET
            quantity = EXCLUDED.quantity,
            price_at_order = EXCLUDED.price_at_order,

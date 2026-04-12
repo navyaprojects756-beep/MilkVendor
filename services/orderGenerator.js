@@ -66,7 +66,7 @@ async function generateForDate(vendorId, targetDate, hasProducts) {
             AND $2::date >= sp.pause_from
             AND (sp.pause_until IS NULL OR $2::date <= sp.pause_until)
         )
-      ON CONFLICT (order_id, product_id)
+      ON CONFLICT (order_id, product_id, order_type)
       DO UPDATE SET
         quantity                 = EXCLUDED.quantity,
         price_at_order           = EXCLUDED.price_at_order,

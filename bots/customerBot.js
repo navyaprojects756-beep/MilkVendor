@@ -885,7 +885,7 @@ async function restorePausedOrders(cId, vId) {
          SELECT $1, product_id, quantity, price_at_order, delivery_charge_at_order, order_type
          FROM paused_order_items_archive
          WHERE archive_id=$2
-         ON CONFLICT (order_id, product_id)
+         ON CONFLICT (order_id, product_id, order_type)
          DO UPDATE SET
            quantity = EXCLUDED.quantity,
            price_at_order = EXCLUDED.price_at_order,
@@ -2095,7 +2095,7 @@ async function handleCustomerBot(msg, pid) {
           INSERT INTO order_items
             (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
           VALUES ($1,$2,$3,$4,$5,'adhoc')
-          ON CONFLICT (order_id, product_id)
+          ON CONFLICT (order_id, product_id, order_type)
           DO UPDATE SET quantity=$3, price_at_order=$4, delivery_charge_at_order=$5, order_type='adhoc'
         `, [orderId, item.product_id, item.qty, item.price, 0])
       }
@@ -2397,7 +2397,7 @@ async function handleCustomerBot(msg, pid) {
       await pool.query(`
         INSERT INTO order_items (order_id, product_id, quantity, price_at_order, delivery_charge_at_order, order_type)
         VALUES ($1,$2,$3,$4,$5,'adhoc')
-        ON CONFLICT (order_id, product_id)
+        ON CONFLICT (order_id, product_id, order_type)
         DO UPDATE SET
           quantity = order_items.quantity + EXCLUDED.quantity,
           price_at_order = EXCLUDED.price_at_order,
