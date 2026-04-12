@@ -256,40 +256,68 @@ function formatOrderWindowText(start, end) {
 }
 
 function isOrderWindowOpen(settings, profile = {}) {
-  if (!settings.order_window_enabled) return true
-  const now = getISTNow()
-  const activeDays = (profile.active_days || settings.active_days || [0, 1, 2, 3, 4, 5, 6]).map(Number)
-  const acceptStartValue = profile.order_accept_start || settings.order_accept_start
-  const acceptEndValue = profile.order_accept_end || settings.order_accept_end
-  if (!acceptStartValue || !acceptEndValue) return true
-  const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m }
-  const startMins = toMins(acceptStartValue)
-  const endMins = toMins(acceptEndValue)
+  const now    = getISTNow()
   const nowMins = now.getHours() * 60 + now.getMinutes()
+  const toMins = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m }
+
+  // Always block during delivery window if delivery times are configured
+  const deliveryStartVal = profile.delivery_start
+  const deliveryEndVal   = profile.delivery_end
+  if (deliveryStartVal && deliveryEndVal) {
+    const dStart = toMins(deliveryStartVal)
+    const dEnd   = toMins(deliveryEndVal)
+    if (dStart < dEnd && nowMins >= dStart && nowMins <= dEnd) return false
+  }
+
+  // Enforce acceptance window when:
+  //   (a) order_window_enabled toggle is on, OR
+  //   (b) acceptance times are explicitly set by the vendor
+  const acceptStartValue = profile.order_accept_start || settings.order_accept_start
+  const acceptEndValue   = profile.order_accept_end   || settings.order_accept_end
+  const hasAcceptTimes   = !!(acceptStartValue && acceptEndValue)
+
+  if (!settings.order_window_enabled && !hasAcceptTimes) return true
+  if (!hasAcceptTimes) return true
+
+  const activeDays = (profile.active_days || settings.active_days || [0, 1, 2, 3, 4, 5, 6]).map(Number)
+  const startMins  = toMins(acceptStartValue)
+  const endMins    = toMins(acceptEndValue)
   if (startMins === endMins) return false
   const isOvernight = startMins > endMins
-  const windowDay = isOvernight && nowMins <= endMins ? (now.getDay() + 6) % 7 : now.getDay()
+  const windowDay   = isOvernight && nowMins <= endMins ? (now.getDay() + 6) % 7 : now.getDay()
   if (!activeDays.includes(windowDay)) return false
   if (startMins < endMins) return nowMins >= startMins && nowMins <= endMins
   return nowMins >= startMins || nowMins <= endMins
 }
 
 async function sendOrderWindowClosedMessage(pid, phone, settings, profile = {}) {
-  const s    = profile.order_accept_start || settings.order_accept_start || null
-  const e    = profile.order_accept_end   || settings.order_accept_end   || null
-  const days = formatActiveDays(profile.active_days || settings.active_days)
-  const wpNum = profile.whatsapp_number || null
+  const toMins  = (t) => { const [h, m] = String(t).split(":").map(Number); return h * 60 + m }
+  const nowMins = getISTNow().getHours() * 60 + getISTNow().getMinutes()
 
-  const windowLine = (s && e)
-    ? `You can place or edit orders between *${formatOrderWindowText(s, e)}* on *${days}*.`
-    : `Please check back later for the order window timing.`
+  const dStart = profile.delivery_start ? toMins(profile.delivery_start) : null
+  const dEnd   = profile.delivery_end   ? toMins(profile.delivery_end)   : null
+  const duringDelivery = dStart != null && dEnd != null && dStart < dEnd && nowMins >= dStart && nowMins <= dEnd
+
+  const acceptStart = profile.order_accept_start || settings.order_accept_start || null
+  const acceptEnd   = profile.order_accept_end   || settings.order_accept_end   || null
+  const days        = formatActiveDays(profile.active_days || settings.active_days)
+  const wpNum       = profile.whatsapp_number || null
+
+  let reason
+  if (duringDelivery) {
+    reason = `We are currently out for delivery (${formatOrderWindowText(profile.delivery_start, profile.delivery_end)}). Orders cannot be edited during delivery.`
+  } else if (acceptStart && acceptEnd) {
+    reason = `Orders can be placed or edited between *${formatOrderWindowText(acceptStart, acceptEnd)}* on *${days}*.`
+  } else {
+    reason = `Please check back later — orders are not being accepted at this time.`
+  }
 
   const contactLine = wpNum
-    ? `\n\nFor immediate help, please contact us on WhatsApp:\n📞 *${wpNum}*`
+    ? `\n\nFor immediate help, contact us on WhatsApp:\n📞 *${wpNum}*`
     : ""
 
   await sendText(pid, phone,
-    `*Orders not accepted right now* 🚫\n\nWe're not taking new or edited orders at this time.\n\n${windowLine}${contactLine}`
+    `*Orders not accepted right now* 🚫\n\n${reason}${contactLine}`
   )
 }
 
