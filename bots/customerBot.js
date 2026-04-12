@@ -1601,12 +1601,6 @@ async function handleCustomerBot(msg, pid) {
       if (hasAnyActivity) {
         const summary = await buildResumeSummary(cId, vId, withProducts)
         await sendText(pid, phone, `*Welcome back!*\n\n${summary || formatAddress(addr)}`)
-        if (withProducts) {
-          await sendProductListFlow(pid, phone, cId, vId,
-            `Tap to update your daily subscription products.`, "sub", "Edit Daily Orders")
-          await sendProductListFlow(pid, phone, cId, vId,
-            `Tap to place or update your extra order for tomorrow.`, "adhoc", "Edit Extra Orders")
-        }
       } else {
         await sendText(pid, phone, `*Welcome to ${name}!*\n\nFresh milk & dairy products delivered to your doorstep. `)
       }
@@ -2263,16 +2257,10 @@ async function handleCustomerBot(msg, pid) {
       if (cart.length === 0) {
         await sendText(pid, phone, `*Orders Cancelled!*\n\nYour adhoc order for ${displayDate(tomorrow)} has been removed.`)
       } else {
-        const orderPlacedText =
+        await sendText(pid, phone,
           `*Order Placed!*\n\n${summary}\n\n` +
           `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
-        await sendText(pid, phone, orderPlacedText)
-        if (withProducts) {
-          await sendProductListFlow(pid, phone, cId, vId,
-            `Tap to update your daily subscription products.`, "sub", "Edit Daily Orders")
-          await sendProductListFlow(pid, phone, cId, vId,
-            `Tap to place or update your extra order for tomorrow.`, "adhoc", "Edit Extra Orders")
-        }
+        )
       }
 
       const sub   = await getSubscription(cId, vId)
