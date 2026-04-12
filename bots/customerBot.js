@@ -1593,18 +1593,13 @@ async function handleCustomerBot(msg, pid) {
         return
       }
 
+      const menuCtxWelcome = await getMenuContextByPhone(phone, vId)
+      const hasAnyActivity = sub?.status === "active" || menuCtxWelcome.hasOrders || menuCtxWelcome.hasUpcomingAdhoc
+
       let welcome
-      if (withProducts && sub?.status === "active") {
-        const subs = await getCustomerProductSubs(cId, vId)
-        const activeProducts = subs.filter(s => s.is_active)
-        if (activeProducts.length > 0) {
-          const summary = await buildResumeSummary(cId, vId, withProducts)
-          welcome = `*Welcome back!*\n\n${summary || `${formatAddress(addr)}`}`
-        } else {
-          welcome = `*Welcome to ${name}!*\n\nBrowse our products and subscribe to daily delivery. `
-        }
-      } else if (sub?.status === "active") {
-        welcome = `*Welcome back!*\n\nYour delivery: *${sub.quantity} packet${sub.quantity > 1 ? "s" : ""}/day*\n${formatAddress(addr)}`
+      if (hasAnyActivity) {
+        const summary = await buildResumeSummary(cId, vId, withProducts)
+        welcome = `*Welcome back!*\n\n${summary || formatAddress(addr)}`
       } else {
         welcome = `*Welcome to ${name}!*\n\nFresh milk & dairy products delivered to your doorstep. `
       }
