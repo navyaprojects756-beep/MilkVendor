@@ -393,8 +393,36 @@ router.post("/", async (req, res) => {
 
         } else {
           /* ── Subscription: save immediately ── */
-          let anyChanged = false
-          for (let i = 0; i < products.length; i++) {
+          // If customer submitted without touching anything (all empty), treat as "cancel all" — save all as 0
+          const allEmpty = products.every((_, i) => {
+            const raw = readQty(flowData, i + 1)
+            return raw === undefined || raw === null || String(raw).trim() === ""
+          })
+          if (allEmpty) {
+            console.log("Subscription: all fields empty — cancelling all subscriptions")
+            for (const p of products) {
+              await pool.query(`
+                UPDATE customer_subscriptions
+                SET is_active=false, quantity=0
+                WHERE customer_id=$1 AND vendor_id=$2 AND product_id=$3
+              `, [customerId, vendorId, p.product_id])
+            }
+            await pool.query(`
+              INSERT INTO subscriptions (customer_id, vendor_id, quantity, status)
+              VALUES ($1,$2,0,'inactive')
+              ON CONFLICT (customer_id, vendor_id)
+              DO UPDATE SET status='inactive', quantity=0
+            `, [customerId, vendorId])
+            await cleanupTodaySubscriptionOrders(customerId, vendorId)
+            await pool.query(`
+              UPDATE conversation_state
+              SET temp_data = COALESCE(temp_data, '{}'::jsonb) || '{"flow_sub_saved": true}'::jsonb
+              WHERE phone = (SELECT phone FROM customers WHERE customer_id=$1 LIMIT 1)
+            `, [customerId])
+          }
+
+          let anyChanged = allEmpty
+          for (let i = 0; i < (allEmpty ? 0 : products.length); i++) {
             const p   = products[i]
             const raw = readQty(flowData, i + 1)
             if (raw === undefined || raw === null || String(raw).trim() === "") continue

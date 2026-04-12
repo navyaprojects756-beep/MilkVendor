@@ -1437,13 +1437,21 @@ async function handleCustomerBot(msg, pid) {
           })
           return
         }
-        // Nothing entered in the flow
-        await sendText(pid, phone, "No items selected. Please enter a quantity for at least one product.")
-        const sub   = await getSubscription(cId, vId)
-          const pause = await getActivePause(cId, vId)
-          await setState(phone, "menu", vId)
-          await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
-          return
+        // Nothing entered in the flow — treat as cancel all adhoc orders
+        const tom = istTomorrowStr()
+        await sendButtons(pid, phone,
+          `*Cancel Tomorrow's Order?*\n\nNo products were selected for ${displayDate(tom)}.\n\nConfirm to cancel all items from your upcoming order.`,
+          [
+            { id: "flow_confirm_order", title: "Cancel Orders" },
+            { id: "flow_cancel_order",  title: "Keep Orders"   },
+          ]
+        )
+        await setState(phone, "flow_adhoc_confirm", vId, {
+          flow_cart:            [],
+          flow_delivery_charge: 0,
+          flow_adhoc_submitted: true,
+        })
+        return
         }
 
         const tom = istTomorrowStr()
@@ -1468,9 +1476,14 @@ async function handleCustomerBot(msg, pid) {
       const sub        = await getSubscription(cId, vId)
       const pause      = await getActivePause(cId, vId)
       const summary = await buildResumeSummary(cId, vId, withProducts)
-      const confirmMsg = subSaved
-        ? `*Products updated!*\n\n${summary || "Your daily subscriptions have been saved."}`
-        : `*No changes detected.*\n\n${summary || "Your subscriptions remain the same."}`
+      let confirmMsg
+      if (subSaved && sub?.status === "inactive") {
+        confirmMsg = `*Daily Orders Cancelled!*\n\nAll your daily product subscriptions have been set to 0. No daily deliveries will be scheduled.`
+      } else if (subSaved) {
+        confirmMsg = `*Products updated!*\n\n${summary || "Your daily subscriptions have been saved."}`
+      } else {
+        confirmMsg = `*No changes detected.*\n\n${summary || "Your subscriptions remain the same."}`
+      }
       await sendText(pid, phone, confirmMsg)
       await setState(phone, "menu", vId)
       await sendMainMenu(pid, phone, sub, profile, pause, withProducts)
@@ -2245,11 +2258,14 @@ async function handleCustomerBot(msg, pid) {
       const timingLine = formatDeliveryWindow(profile)
 
       const summary = await buildResumeSummary(cId, vId, withProducts)
-      const headline = cart.length > 0 ? "*Order Placed!*" : "*Order updated!*"
-      await sendText(pid, phone,
-        `${headline}\n\n${summary}\n\n` +
-        `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
-      )
+      if (cart.length === 0) {
+        await sendText(pid, phone, `*Orders Cancelled!*\n\nYour adhoc order for ${displayDate(tomorrow)} has been removed.`)
+      } else {
+        await sendText(pid, phone,
+          `*Order Placed!*\n\n${summary}\n\n` +
+          `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
+        )
+      }
 
       const sub   = await getSubscription(cId, vId)
       const pause = await getActivePause(cId, vId)
