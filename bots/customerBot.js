@@ -1596,14 +1596,20 @@ async function handleCustomerBot(msg, pid) {
       const menuCtxWelcome = await getMenuContextByPhone(phone, vId)
       const hasAnyActivity = sub?.status === "active" || menuCtxWelcome.hasOrders || menuCtxWelcome.hasUpcomingAdhoc
 
-      let welcome
       if (hasAnyActivity) {
         const summary = await buildResumeSummary(cId, vId, withProducts)
-        welcome = `*Welcome back!*\n\n${summary || formatAddress(addr)}`
+        const welcomeText = `*Welcome back!*\n\n${summary || formatAddress(addr)}`
+        if (withProducts) {
+          await sendButtons(pid, phone, welcomeText, [
+            { id: "manage_products", title: "Edit Daily Orders"  },
+            { id: "adhoc_order",     title: "Edit Extra Orders"  },
+          ])
+        } else {
+          await sendText(pid, phone, welcomeText)
+        }
       } else {
-        welcome = `*Welcome to ${name}!*\n\nFresh milk & dairy products delivered to your doorstep. `
+        await sendText(pid, phone, `*Welcome to ${name}!*\n\nFresh milk & dairy products delivered to your doorstep. `)
       }
-      await sendText(pid, phone, welcome)
 
       if (!isOrderWindowOpen(settings, profile)) {
         await sendOrderWindowClosedMessage(pid, phone, settings, profile)
@@ -2257,10 +2263,17 @@ async function handleCustomerBot(msg, pid) {
       if (cart.length === 0) {
         await sendText(pid, phone, `*Orders Cancelled!*\n\nYour adhoc order for ${displayDate(tomorrow)} has been removed.`)
       } else {
-        await sendText(pid, phone,
+        const orderPlacedText =
           `*Order Placed!*\n\n${summary}\n\n` +
           `Your order will be delivered tomorrow${timingLine ? ` between ${formatTime12(profile.delivery_start)} and ${formatTime12(profile.delivery_end)}` : ""}.\nDelivery Date: ${displayDate(tomorrow)}\n\nThank you!`
-        )
+        if (withProducts) {
+          await sendButtons(pid, phone, orderPlacedText, [
+            { id: "manage_products", title: "Edit Daily Orders"  },
+            { id: "adhoc_order",     title: "Edit Extra Orders"  },
+          ])
+        } else {
+          await sendText(pid, phone, orderPlacedText)
+        }
       }
 
       const sub   = await getSubscription(cId, vId)
