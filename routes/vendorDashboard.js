@@ -69,12 +69,26 @@ function isWithinTimeWindow(nowMins, startMins, endMins) {
   return nowMins >= startMins || nowMins <= endMins
 }
 
-function overlapsNextDayDelivery(deliveryStart, deliveryEnd, acceptStart, acceptEnd) {
+function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd
+}
+
+function overlapsDeliveryWindow(deliveryStart, deliveryEnd, acceptStart, acceptEnd) {
   if (deliveryStart == null || deliveryEnd == null || acceptStart == null || acceptEnd == null) return false
-  if (acceptStart <= acceptEnd) return false
+  if (acceptStart === acceptEnd) return true
+
+  if (acceptStart < acceptEnd) {
+    return rangesOverlap(acceptStart, acceptEnd, deliveryStart, deliveryEnd)
+  }
+
   const acceptanceRange = { start: acceptStart, end: acceptEnd + 1440 }
-  const deliveryRange = { start: deliveryStart + 1440, end: deliveryEnd + 1440 }
-  return acceptanceRange.start < deliveryRange.end && deliveryRange.start < acceptanceRange.end
+  const todayDelivery = { start: deliveryStart, end: deliveryEnd }
+  const nextDayDelivery = { start: deliveryStart + 1440, end: deliveryEnd + 1440 }
+
+  return (
+    rangesOverlap(acceptanceRange.start, acceptanceRange.end, todayDelivery.start, todayDelivery.end) ||
+    rangesOverlap(acceptanceRange.start, acceptanceRange.end, nextDayDelivery.start, nextDayDelivery.end)
+  )
 }
 
 function getWindowActiveDay(now, startMins, endMins) {
@@ -105,11 +119,8 @@ function validateSchedule(profile = {}, settings = {}) {
   if (acceptStart != null && acceptEnd != null && acceptStart === acceptEnd) {
     return "Order acceptance start and end time cannot be the same."
   }
-  if (deliveryEnd != null && acceptStart != null && acceptStart < acceptEnd && acceptStart <= deliveryEnd) {
-    return "Order acceptance must start after delivery end time."
-  }
-  if (overlapsNextDayDelivery(deliveryStart, deliveryEnd, acceptStart, acceptEnd)) {
-    return "Order acceptance window cannot continue into delivery time. Adjust the end time or delivery time."
+  if (overlapsDeliveryWindow(deliveryStart, deliveryEnd, acceptStart, acceptEnd)) {
+    return "Order acceptance window cannot overlap with delivery time. It must start only after delivery ends."
   }
   if (settings.auto_generate_time && deliveryEnd != null && autoGenerate != null && autoGenerate < deliveryEnd) {
     return "Daily generation time cannot be earlier than delivery end time."
