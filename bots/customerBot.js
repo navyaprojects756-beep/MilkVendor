@@ -275,11 +275,21 @@ function isOrderWindowOpen(settings, profile = {}) {
 }
 
 async function sendOrderWindowClosedMessage(pid, phone, settings, profile = {}) {
-  const s = profile.order_accept_start || settings.order_accept_start || "—"
-  const e = profile.order_accept_end   || settings.order_accept_end || "—"
+  const s    = profile.order_accept_start || settings.order_accept_start || null
+  const e    = profile.order_accept_end   || settings.order_accept_end   || null
   const days = formatActiveDays(profile.active_days || settings.active_days)
+  const wpNum = profile.whatsapp_number || null
+
+  const windowLine = (s && e)
+    ? `You can place or edit orders between *${formatOrderWindowText(s, e)}* on *${days}*.`
+    : `Please check back later for the order window timing.`
+
+  const contactLine = wpNum
+    ? `\n\nFor immediate help, please contact us on WhatsApp:\n📞 *${wpNum}*`
+    : ""
+
   await sendText(pid, phone,
-    `*Order window is currently closed.*\n\nWe accept order updates from *${formatOrderWindowText(s, e)}* on *${days}*.\n\nChanges can only be made during these hours.`
+    `*Orders not accepted right now* 🚫\n\nWe're not taking new or edited orders at this time.\n\n${windowLine}${contactLine}`
   )
 }
 
