@@ -365,31 +365,27 @@ router.post("/", async (req, res) => {
             console.log(`  Adhoc item: ${p.name} × ${qty}`)
           }
 
-          if (true) {
-            const policy = await getVendorDeliveryPolicy(vendorId)
-            const deliveryCharge = cartItems.length > 0
-              ? computeOrderDeliveryCharge(
-                  cartItems.map((item) => ({ quantity: item.qty, order_type: "adhoc" })),
-                  policy
-                )
-              : 0
-            /* Store cart in customer's conversation_state temp_data */
-            await pool.query(`
-              UPDATE conversation_state
-              SET temp_data = COALESCE(temp_data, '{}'::jsonb) || $1::jsonb
-              WHERE phone = (SELECT phone FROM customers WHERE customer_id=$2 LIMIT 1)
-            `, [
-              JSON.stringify({
-                flow_cart: cartItems,
-                flow_delivery_charge: deliveryCharge,
-                flow_adhoc_submitted: hadFlowInput,
-              }),
-              customerId,
-            ])
-            console.log(`Adhoc cart stored (${cartItems.length} items), delivery: ₹${deliveryCharge}`)
-          } else {
-            console.log("Adhoc: no items entered — nothing stored")
-          }
+          const policy = await getVendorDeliveryPolicy(vendorId)
+          const deliveryCharge = cartItems.length > 0
+            ? computeOrderDeliveryCharge(
+                cartItems.map((item) => ({ quantity: item.qty, order_type: "adhoc" })),
+                policy
+              )
+            : 0
+          /* Store cart in customer's conversation_state temp_data */
+          await pool.query(`
+            UPDATE conversation_state
+            SET temp_data = COALESCE(temp_data, '{}'::jsonb) || $1::jsonb
+            WHERE phone = (SELECT phone FROM customers WHERE customer_id=$2 LIMIT 1)
+          `, [
+            JSON.stringify({
+              flow_cart: cartItems,
+              flow_delivery_charge: deliveryCharge,
+              flow_adhoc_submitted: hadFlowInput,
+            }),
+            customerId,
+          ])
+          console.log(`Adhoc cart stored (${cartItems.length} items), delivery: ₹${deliveryCharge}`)
 
         } else {
           /* ── Subscription: save immediately ── */
@@ -409,7 +405,7 @@ router.post("/", async (req, res) => {
             if (qty === 0) {
               await pool.query(`
                 UPDATE customer_subscriptions
-                SET is_active=false, quantity=0
+                SET is_active=false
                 WHERE customer_id=$1 AND vendor_id=$2 AND product_id=$3
               `, [customerId, vendorId, p.product_id])
             } else {
