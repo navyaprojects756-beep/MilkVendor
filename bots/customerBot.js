@@ -1118,6 +1118,23 @@ async function downloadWhatsAppMedia(mediaId) {
 async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts = false, showPrompt = false) {
   const name = (profile?.business_name || "Milk Service").trim()
   const vendorId = profile?.vendor_id || sub?.vendor_id || pause?.vendor_id || null
+
+  // If customer has no address, only show Profile — all other features require it
+  const addrCheck = await pool.query(
+    `SELECT 1 FROM customer_vendor_profile cv
+     JOIN customers c ON c.customer_id = cv.customer_id
+     WHERE c.phone=$1 AND cv.vendor_id=$2 LIMIT 1`,
+    [phone, vendorId]
+  )
+  if (addrCheck.rows.length === 0) {
+    await sendList(pid, phone,
+      `*${name}*\n\nPlease complete your profile setup to access all features.`,
+      [{ id: "profile", title: "Profile", description: "Set up your delivery address" }],
+      "View Options"
+    )
+    return
+  }
+
   const menuCtx = await getMenuContextByPhone(phone, vendorId)
   const adhocMenuTitle = menuCtx.hasUpcomingAdhoc ? "Change Order Tomorrow" : "Order Tomorrow"
   const adhocMenuDesc = menuCtx.hasUpcomingAdhoc ? "Update your extra products for tomorrow" : "Order extra products for tomorrow"
