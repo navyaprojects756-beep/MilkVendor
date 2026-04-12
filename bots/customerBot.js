@@ -1157,7 +1157,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
   }
 
   const menuCtx = await getMenuContextByPhone(phone, vendorId)
-  const adhocMenuTitle = menuCtx.hasUpcomingAdhoc ? "Change Order Tomorrow" : "Order Tomorrow"
+  const adhocMenuTitle = menuCtx.hasUpcomingAdhoc ? "Change Tomorrow Orders" : "Order Tomorrow"
   const adhocMenuDesc = menuCtx.hasUpcomingAdhoc ? "Update your extra products for tomorrow" : "Order extra products for tomorrow"
   let header, rows
 
@@ -1202,7 +1202,7 @@ async function sendMainMenu(pid, phone, sub, profile, pause = null, withProducts
     rows = [
       { id: "view",        title: "View Orders & Plan", description: "View subscription and order details" },
       { id: "profile",     title: "Profile",           description: "View or update your details" },
-      { id: "pause",       title: "Pause Delivery",     description: "Skip delivery for some days" },
+      { id: "pause",       title: "Pause Daily Delivery", description: "Skip daily delivery for some days" },
       { id: "get_invoice", title: "Get Bill",          description: "Download your bill"          },
     ]
     if (withProducts) {
