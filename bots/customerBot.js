@@ -2648,11 +2648,11 @@ async function handleCustomerBot(msg, pid) {
     return
   }
 
-  /* -- Fallback: capture unhandled message ? auto-reply -- */
+  /* -- Fallback: capture unhandled message → auto-reply -- */
 
   // Save inbound message to inbox
   let msgContent = null, msgType = "text", mediaId = null
-  if (msg.type === "text")     { msgContent = msg.text?.body }
+  if (msg.type === "text")          { msgContent = msg.text?.body }
   else if (msg.type === "image")    { msgType = "image";    mediaId = msg.image?.id;    msgContent = msg.image?.caption }
   else if (msg.type === "document") { msgType = "document"; mediaId = msg.document?.id; msgContent = msg.document?.caption }
   else if (msg.type === "audio")    { msgType = "audio";    mediaId = msg.audio?.id }
@@ -2673,6 +2673,18 @@ async function handleCustomerBot(msg, pid) {
           ? `Thank you for your message.\n\nOur team has received it and will review it.\n\nFor immediate help, please call:\n*${vendorPhone}*`
           : `Thank you for your message.\n\nOur team will review it and get back to you if needed.`)
   await sendText(pid, phone, autoReply)
+
+  // If customer has no address, always re-show registration — never show menu
+  const fallbackAddr = await getAddress(cId, vId)
+  if (!fallbackAddr) {
+    const bizName = (profile?.business_name || "MilkRoute").trim()
+    await sendText(pid, phone,
+      `Welcome to *${bizName}*!\n\nTo start receiving daily deliveries, please complete your account setup by tapping the button below.`
+    )
+    const sent = await sendRegistrationFlow(pid, phone, vId, cId, bizName)
+    await setState(phone, sent ? "awaiting_registration" : "menu", vId)
+    return
+  }
 
   const sub   = await getSubscription(cId, vId)
   const pause = await getActivePause(cId, vId)
