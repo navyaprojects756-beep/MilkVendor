@@ -239,8 +239,8 @@ async function buildProductScreenData(vendorId, customerId, mode = "sub") {
 
   const data = {
     max_qty_note: maxQtyPerOrder
-      ? `Only enter packet count like 1, 2, 3. Max ${maxQtyPerOrder}.`
-      : "Only enter packet count like 1, 2, 3.",
+      ? `Only Select Quantity like 1, 2, 3. Max ${maxQtyPerOrder}.`
+      : "Only Select Quantity like 1, 2, 3.",
   }
 
   for (let i = 1; i <= MAX_SLOTS; i++) {
